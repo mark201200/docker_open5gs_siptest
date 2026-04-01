@@ -73,11 +73,18 @@ then
 	sed -i 's|##!define WITH_N5\b|#!define WITH_N5|g' /etc/kamailio_pcscf/pcscf.cfg
 fi
 
+if [[ "${ENABLE_SIP_PROXY,,}" == "true" ]];
+then
+	sed -i 's|##!define WITH_SIP_PROXY\b|#!define WITH_SIP_PROXY|g' /etc/kamailio_pcscf/pcscf.cfg
+fi
+
 SUBSCRIPTION_EXPIRES_ENV=603600
 
 sed -i 's|PCSCF_IP|'$PCSCF_IP'|g' /etc/kamailio_pcscf/pcscf.cfg
 sed -i 's|SUBSCRIPTION_EXPIRES_ENV|'$SUBSCRIPTION_EXPIRES_ENV'|g' /etc/kamailio_pcscf/pcscf.cfg
 sed -i 's|SCP_IP|'$SCP_IP'|g' /etc/kamailio_pcscf/pcscf.cfg
+sed -i 's|SIP_PROXY_IP|'$SIP_PROXY_IP'|g' /etc/kamailio_pcscf/pcscf.cfg
+sed -i 's|SIP_PROXY_PORT|'$SIP_PROXY_PORT'|g' /etc/kamailio_pcscf/pcscf.cfg
 sed -i 's|PCSCF_PUB_IP|'$PCSCF_PUB_IP'|g' /etc/kamailio_pcscf/pcscf.cfg
 sed -i 's|IMS_DOMAIN|'$IMS_DOMAIN'|g' /etc/kamailio_pcscf/pcscf.cfg
 sed -i 's|EPC_DOMAIN|'$EPC_DOMAIN'|g' /etc/kamailio_pcscf/pcscf.cfg
@@ -92,6 +99,19 @@ sed -i 's|PCSCF_BIND_PORT|'$PCSCF_BIND_PORT'|g' /etc/kamailio_pcscf/pcscf.xml
 
 sed -i 's|RTPENGINE_IP|'$RTPENGINE_IP'|g' /etc/kamailio_pcscf/kamailio_pcscf.cfg
 sed -i 's|RTPENGINE_IP|'$RTPENGINE_IP'|g' /etc/kamailio_pcscf/route/rtp.cfg
+
+# Replace placeholders in included route files and main Kamailio script,
+# not only in pcscf.cfg. Otherwise literals like IMS_DOMAIN/HOSTNAME can
+# leak into SIP headers (e.g. X-SIP-Proxy-Target, Path).
+for f in /etc/kamailio_pcscf/kamailio_pcscf.cfg /etc/kamailio_pcscf/route/register.cfg /etc/kamailio_pcscf/route/mo.cfg
+do
+	sed -i 's|HOSTNAME|pcscf.'$IMS_DOMAIN'|g' "$f"
+	sed -i 's|NETWORKNAME|'$IMS_DOMAIN'|g' "$f"
+	sed -i 's|IMS_DOMAIN|'$IMS_DOMAIN'|g' "$f"
+	sed -i 's|EPC_DOMAIN|'$EPC_DOMAIN'|g' "$f"
+	sed -i 's|SIP_PROXY_IP|'$SIP_PROXY_IP'|g' "$f"
+	sed -i 's|SIP_PROXY_PORT|'$SIP_PROXY_PORT'|g' "$f"
+done
 
 # Add static route to route traffic back to UE as there is not NATing
 ip r add ${UE_IPV4_IMS} via ${UPF_IP}

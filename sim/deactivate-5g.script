@@ -8,7 +8,7 @@ set echo true
 # without any 5G capability, using the default fall-back mechanisms specified by 3GPP.
 
 # TODO: add your card-specific ADM pin at the end of the verify_adm line below
-verify_adm 11111111
+verify_adm 54498818
 
 # deactivate any 5G related services in EF.UST
 select ADF.USIM

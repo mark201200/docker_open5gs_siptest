@@ -42,6 +42,10 @@ sessions:
     apn: 'internet'
     slice:
       sst: 1
+  - type: 'IPv4'
+    apn: 'ims'
+    slice:
+      sst: 1
 
 # Configured NSSAI for this UE by HPLMN
 configured-nssai:

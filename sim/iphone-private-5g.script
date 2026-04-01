@@ -6,7 +6,8 @@ set debug true
 # this script will activate all 5G related services and files required for iPhone to allow SA operation.
 
 # TODO: add your card-specific ADM pin at the end of the verify_adm line below
-verify_adm 97965180
+verify_adm 54498818
+# verify_chv 0000
 
 # activate any 5G related services in EF.UST
 select ADF.USIM

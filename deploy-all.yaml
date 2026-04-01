@@ -560,6 +560,43 @@ services:
     networks:
       default:
         ipv4_address: ${SCSCF_IP}
+  sip_proxy:
+    build: ./sip_proxy
+    image: docker_sip_proxy
+    container_name: sip_proxy
+    dns: ${DNS_IP}
+    volumes:
+      - ./sip_proxy:/mnt/sip_proxy
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    env_file:
+      - .env
+    environment:
+      - SIP_PROXY_LISTEN_IP=${SIP_PROXY_IP}
+      - SIP_PROXY_LISTEN_PORT=${SIP_PROXY_PORT}
+      - SIP_PROXY_API_LISTEN_IP=0.0.0.0
+      - SIP_PROXY_API_PORT=${SIP_PROXY_API_PORT}
+      - SIP_PROXY_ADVERTISED_HOST=${SIP_PROXY_IP}
+      - SIP_PROXY_PCSCF_IP=${PCSCF_IP}
+      - SIP_PROXY_PCSCF_PORT=5060
+      - SIP_PROXY_DEFAULT_CORE_IP=${ICSCF_IP}
+      - SIP_PROXY_DEFAULT_CORE_PORT=4060
+      - SIP_PROXY_ROUTE_USER=sipproxy
+      - SIP_PROXY_INSERT_RECORD_ROUTE=true
+      - SIP_PROXY_LOG_MESSAGES=false
+    depends_on:
+      - dns
+      - icscf
+      - scscf
+    expose:
+      - "${SIP_PROXY_PORT}/udp"
+      - "${SIP_PROXY_PORT}/tcp"
+      - "${SIP_PROXY_API_PORT}/tcp"
+    ports:
+      - "${SIP_PROXY_API_PORT}:${SIP_PROXY_API_PORT}/tcp"
+    networks:
+      default:
+        ipv4_address: ${SIP_PROXY_IP}
   pcscf:
     image: docker_kamailio
     container_name: pcscf
@@ -576,12 +613,14 @@ services:
     environment:
       - COMPONENT_NAME=pcscf
       - DEPLOY_MODE=ALL
+      - ENABLE_SIP_PROXY=true
     depends_on:
       - dns
       - mysql
       - rtpengine
       - icscf
       - scscf
+      - sip_proxy
     expose:
       - "${PCSCF_BIND_PORT}/tcp"
       - "${PCSCF_BIND_PORT}/sctp"

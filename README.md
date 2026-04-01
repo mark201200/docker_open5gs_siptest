@@ -387,6 +387,66 @@ docker compose -f nr-gnb.yaml up -d && docker container attach nr_gnb
 docker compose -f nr-ue.yaml up -d && docker container attach nr_ue
 ```
 
+## SIP Proxy Integration (Kamailio IMS)
+
+A Python SIP proxy container is integrated for Kamailio IMS deployments in:
+
+- `4g-volte-deploy.yaml`
+- `sa-vonr-deploy.yaml`
+- `deploy-all.yaml`
+
+The proxy is placed on the core-facing side of P-CSCF, so UE-facing IPSec remains terminated at P-CSCF.
+This avoids IPSec integrity/authentication issues while still allowing SIP inspection/modification/injection.
+The proxy listens on both UDP and TCP for SIP on `SIP_PROXY_PORT`.
+
+### Enable or disable
+
+In `.env`:
+
+```bash
+ENABLE_SIP_PROXY=true
+SIP_PROXY_IP=172.22.0.43
+SIP_PROXY_PORT=5062
+SIP_PROXY_API_PORT=8088
+```
+
+The above compose files already set `ENABLE_SIP_PROXY=true` for `pcscf`.
+
+### Start with proxy
+
+```bash
+docker compose -f 4g-volte-deploy.yaml up -d
+# or
+docker compose -f sa-vonr-deploy.yaml up -d
+```
+
+### API endpoints
+
+- Health check:
+
+```bash
+curl -s http://127.0.0.1:${SIP_PROXY_API_PORT}/health
+```
+
+- Send arbitrary SIP MESSAGE into IMS (for delivery to registered UEs via IMS routing):
+
+```bash
+curl -s -X POST http://127.0.0.1:${SIP_PROXY_API_PORT}/inject/message \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "to_uri":"sip:9076543211@ims.mnc001.mcc001.3gppnetwork.org",
+    "from_uri":"sip:proxy@ims.mnc001.mcc001.3gppnetwork.org",
+    "body":"Hello from proxy",
+    "content_type":"text/plain"
+  }'
+```
+
+### Optional message rewrite rules
+
+You can set `SIP_PROXY_REWRITE_RULES` as JSON array in the `sip_proxy` service environment.
+Each rule is `{ "pattern": "...", "replace": "..." }` and is applied with regex substitution.
+Use carefully, as aggressive rewrites can break SIP compliance.
+
 ## Docker Compose files overview
 
 This repository provides several Docker Compose files to support different deployment scenarios and components. Below is a summary of the compose files and their purposes:
