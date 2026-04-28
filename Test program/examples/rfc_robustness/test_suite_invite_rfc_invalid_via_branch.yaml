@@ -1,0 +1,39 @@
+suite:
+  id: ims_invite_rfc_invalid_via_branch
+  title: INVITE RFC robustness - invalid Via branch format
+  default_timeout_seconds: 6.0
+
+tests:
+  - id: invite_invalid_via_branch
+    description: Replace branch cookie with non-z9hG4bK branch token
+    message:
+      type: INVITE
+      template: |
+        INVITE sip:alice@example.com SIP/2.0
+        Via: SIP/2.0/UDP 192.0.2.100:5060;branch=z9hG4bK-rfc-via-1
+        Max-Forwards: 70
+        From: <sip:bob@example.com>;tag=robust-via
+        To: <sip:alice@example.com>
+        Call-ID: rfc-via-1@tester
+        CSeq: 1 INVITE
+        Contact: <sip:bob@192.0.2.100:5060>
+        Content-Type: application/sdp
+        Content-Length: 133
+
+        v=0
+        o=- 8 8 IN IP4 192.0.2.100
+        s=IMS-Robustness
+        c=IN IP4 192.0.2.100
+        t=0 0
+        m=audio 49170 RTP/AVP 0
+        a=rtpmap:0 PCMU/8000
+      edits:
+        - target: header
+          action: set
+          field: Via
+          value: SIP/2.0/UDP 192.0.2.100:5060;branch=badbranch
+      repeat:
+        count: 1
+        rate_per_second: 1.0
+
+    expected_response: {}

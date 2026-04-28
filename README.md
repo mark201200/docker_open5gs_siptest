@@ -447,6 +447,10 @@ You can set `SIP_PROXY_REWRITE_RULES` as JSON array in the `sip_proxy` service e
 Each rule is `{ "pattern": "...", "replace": "..." }` and is applied with regex substitution.
 Use carefully, as aggressive rewrites can break SIP compliance.
 
+For live call stability, `sip_proxy` skips non-tester INVITE SDP rewrites that modify
+`Content-Type` or `Content-Length`. To force those unsafe rewrites for research-only runs,
+set `SIP_PROXY_ALLOW_UNSAFE_LIVE_INVITE_SDP_REWRITE=true` in the `sip_proxy` container.
+
 ## Docker Compose files overview
 
 This repository provides several Docker Compose files to support different deployment scenarios and components. Below is a summary of the compose files and their purposes:

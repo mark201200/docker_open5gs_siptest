@@ -1,0 +1,74 @@
+suite:
+  id: ai_intercept_only_live_mutations
+  title: AI intercept-only live SIP mutation probes
+  default_timeout_seconds: 45.0
+
+tests:
+  - id: ai_intercept_only_invite_bad_content_type
+    description: Wait for live INVITE request and rewrite Content-Type to invalid token
+    message:
+      type: INVITE
+      intercept_only: true
+      intercept_message_type: INVITE
+      intercept_direction: request
+      intercept_wait_timeout_seconds: 45.0
+      intercept_edits:
+        - target: header
+          action: set
+          field: Content-Type
+          value: application/this-is-not-a-valid-sdp-token
+      repeat:
+        count: 1
+        rate_per_second: 1.0
+    expected_response: {}
+
+  - id: ai_intercept_only_invite_remove_contact
+    description: Wait for live INVITE request and remove Contact header
+    message:
+      type: INVITE
+      intercept_only: true
+      intercept_message_type: INVITE
+      intercept_direction: request
+      intercept_wait_timeout_seconds: 45.0
+      intercept_edits:
+        - target: header
+          action: remove
+          field: Contact
+      repeat:
+        count: 1
+        rate_per_second: 1.0
+    expected_response: {}
+
+  - id: ai_intercept_only_invite_poison_start_line
+    description: Wait for live INVITE request and rewrite start-line with malformed URI
+    message:
+      type: INVITE
+      intercept_only: true
+      intercept_message_type: INVITE
+      intercept_direction: request
+      intercept_wait_timeout_seconds: 45.0
+      intercept_edits:
+        - target: start_line
+          action: set
+          value: INVITE sip:%%%bad-uri%%% SIP/2.0
+      repeat:
+        count: 1
+        rate_per_second: 1.0
+    expected_response: {}
+
+  - id: ai_intercept_only_response_status_poison
+    description: Wait for live INVITE response and rewrite status-line to non-standard code
+    message:
+      type: INVITE
+      intercept_only: true
+      intercept_message_type: INVITE
+      intercept_direction: response
+      intercept_wait_timeout_seconds: 45.0
+      intercept_edits:
+        - target: start_line
+          action: set
+          value: SIP/2.0 799 AI-MALFORMED
+      repeat:
+        count: 1
+        rate_per_second: 1.0
+    expected_response: {}

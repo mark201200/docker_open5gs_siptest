@@ -1,0 +1,39 @@
+suite:
+  id: ims_invite_rfc_cseq_method_mismatch
+  title: INVITE RFC robustness - CSeq method mismatch
+  default_timeout_seconds: 6.0
+
+tests:
+  - id: invite_cseq_method_mismatch
+    description: INVITE start-line with CSeq method set to MESSAGE
+    message:
+      type: INVITE
+      template: |
+        INVITE sip:alice@example.com SIP/2.0
+        Via: SIP/2.0/UDP 192.0.2.100:5060;branch=z9hG4bK-rfc-cseq-1
+        Max-Forwards: 70
+        From: <sip:bob@example.com>;tag=robust-cseq
+        To: <sip:alice@example.com>
+        Call-ID: rfc-cseq-1@tester
+        CSeq: 1 INVITE
+        Contact: <sip:bob@192.0.2.100:5060>
+        Content-Type: application/sdp
+        Content-Length: 133
+
+        v=0
+        o=- 3 3 IN IP4 192.0.2.100
+        s=IMS-Robustness
+        c=IN IP4 192.0.2.100
+        t=0 0
+        m=audio 49170 RTP/AVP 0
+        a=rtpmap:0 PCMU/8000
+      edits:
+        - target: header
+          action: set
+          field: CSeq
+          value: 1 MESSAGE
+      repeat:
+        count: 1
+        rate_per_second: 1.0
+
+    expected_response: {}

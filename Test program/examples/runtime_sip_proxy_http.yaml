@@ -1,0 +1,18 @@
+transport:
+  name: sip-proxy-http
+  settings:
+    api_base_url: http://127.0.0.1:8088
+    send_path: /tester/send
+    read_path: /tester/read
+    health_path: /health
+    live_edit_rules_path: /tester/live-edit-rules
+    live_edit_invite_content_type_path: /tester/live-edit-rules/invite-content-type
+    live_edit_wait_path: /tester/live-edit-wait
+    discovered_devices_path: /tester/discovered-devices
+    request_timeout_seconds: 10
+    default_target_port: 5060
+    default_target_transport: udp
+    check_health_on_open: true
+
+# Optional in sip-proxy-http mode. Leave empty to rely on REGISTER auto-discovery.
+devices: []

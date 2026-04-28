@@ -1,0 +1,12 @@
+\babel@toc {italian}{}\relax 
+\contentsline {chapter}{Introduzione}{1}{}%
+\contentsline {chapter}{\numberline {1}Introduzione e contesto}{2}{}%
+\contentsline {chapter}{\numberline {2}Background e stato dell'arte}{3}{}%
+\contentsline {chapter}{\numberline {3}Requisiti e progettazione}{4}{}%
+\contentsline {chapter}{\numberline {4}Architettura del framework}{5}{}%
+\contentsline {chapter}{\numberline {5}Implementazione}{6}{}%
+\contentsline {chapter}{\numberline {6}Validazione e risultati}{7}{}%
+\contentsline {chapter}{\numberline {7}Conclusioni e sviluppi futuri}{8}{}%
+\contentsline {chapter}{Elenco delle figure}{9}{}%
+\contentsline {chapter}{Elenco dei codici}{9}{}%
+\contentsline {chapter}{Elenco degli algoritmi}{9}{}%
