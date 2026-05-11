@@ -81,3 +81,54 @@ def test_render_comparison_report_includes_differences() -> None:
     assert "Comparison: a vs b" in text
     assert "[DIFF] c1 - desc" in text
     assert "- status_code differs" in text
+
+
+def test_render_comparison_report_expands_header_differences() -> None:
+    report = ComparisonReport(
+        suite_id="s1",
+        suite_title="Suite",
+        device_a="a",
+        device_b="b",
+        started_at_utc="2026-01-01T00:00:00Z",
+        finished_at_utc="2026-01-01T00:00:01Z",
+        total_cases=1,
+        cases_with_differences=1,
+        case_results=[
+            ComparisonCaseResult(
+                case_id="c1",
+                description="desc",
+                differences_found=True,
+                iterations=[
+                    ComparisonIteration(
+                        iteration=1,
+                        differences=["header 'privacy' differs: A=[], B=['id']"],
+                        response_a=None,
+                        response_b=None,
+                    )
+                ],
+            )
+        ],
+    )
+
+    text = render_comparison_report(report)
+    assert "- header 'privacy' differs:" in text
+    assert "        A=[]" in text
+    assert "        B=['id']" in text
+
+
+def test_render_comparison_report_lists_all_selected_devices() -> None:
+    report = ComparisonReport(
+        suite_id="s1",
+        suite_title="Suite",
+        device_a="a",
+        device_b="b",
+        started_at_utc="2026-01-01T00:00:00Z",
+        finished_at_utc="2026-01-01T00:00:01Z",
+        total_cases=0,
+        cases_with_differences=0,
+        case_results=[],
+        device_ids=["a", "b", "c"],
+    )
+
+    text = render_comparison_report(report)
+    assert "Comparison: a vs b vs c" in text

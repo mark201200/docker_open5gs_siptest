@@ -14,10 +14,14 @@ transport:
     default_target_transport: udp
     check_health_on_open: true
 
-# Discovery method: use sip-proxy (auto-discovered from SIP REGISTER)
-# (default is sip-proxy, can be omitted)
+# Discovery method: use open5gs (pdu-info API + MongoDB)
 discovery:
-  method: sip-proxy
+  method: open5gs
+  settings:
+    open5gs_api_url: http://127.0.0.1:9090
+    mongodb_uri: mongodb://127.0.0.1:27017
+    mongodb_db: open5gs
+    request_timeout_seconds: 10
 
-# Optional in sip-proxy-http mode. Leave empty to rely on REGISTER auto-discovery.
+# Optional: add manually configured devices
 devices: []

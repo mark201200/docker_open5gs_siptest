@@ -1,0 +1,38 @@
+\chapter{Background tecnico e architetture di riferimento}
+\begin{minipage}{12cm}\textit{Questo capitolo introduce il contesto tecnico necessario per comprendere il framework: architettura IMS, protocollo SIP e il ruolo generale delle reti 4G/5G come supporto al servizio voce.}
+\end{minipage}
+\vspace*{1cm}
+
+\section{Architettura IMS}
+L'IP Multimedia Subsystem, o IMS, \`e l'architettura di riferimento per l'erogazione di servizi multimediali su reti %a commutazione di pacchetto
+. Il suo obiettivo \`e separare il livello di accesso radio dal livello di servizio, introducendo un insieme di funzioni di controllo che gestiscono registrazione, autenticazione, instradamento delle sessioni e interazione con i servizi applicativi.
+
+Dal punto di vista logico, IMS organizza la segnalazione attorno ad alcuni nodi fondamentali. Il terminale utente interagisce con il \emph{Proxy-Call Session Control Function} (P-CSCF), che rappresenta il primo punto di ingresso nel dominio IMS. Il P-CSCF inoltra le richieste verso il \emph{Interrogating-CSCF} (I-CSCF) e, successivamente, verso lo \emph{Serving-CSCF} (S-CSCF), che governa il ciclo di vita della sessione e applica le politiche di servizio. L'autenticazione e la gestione dell'identit\`a dell'utente fanno invece affidamento sulle funzioni di database e profilo, in particolare \emph{Home Subscriber Server} (HSS) nel dominio classico e gli equivalenti componenti di gestione dell'identit\`a nel dominio 5G.
+
+In questa architettura la separazione tra segnalazione e piano utente \`e essenziale. La segnalazione SIP controlla registrazione e sessioni, mentre i flussi media vengono negoziati separatamente e trasportati fuori banda. Questa distinzione \`e rilevante per il framework, perch\'e consente di intervenire sui messaggi di controllo senza alterare direttamente il traffico media, oppure di correlare i due piani quando il test richiede una verifica end-to-end.
+
+\section{Il protocollo SIP}
+Il \emph{Session Initiation Protocol} (SIP) \`e il protocollo applicativo usato da IMS per stabilire, modificare e terminare sessioni multimediali. SIP adotta una semantica testuale, orientata a richieste e risposte, che rende relativamente semplice ispezionare e manipolare i messaggi durante l'esecuzione dei test.
+
+Tra i metodi pi\`u rilevanti vi sono \texttt{REGISTER}, \texttt{INVITE}, \texttt{ACK}, \texttt{BYE}, \texttt{CANCEL} e \texttt{OPTIONS}. \texttt{REGISTER} associa un'identit\`a SIP a una posizione raggiungibile, mentre \texttt{INVITE} avvia una sessione. \texttt{ACK} conferma l'instaurazione del dialogo, \texttt{BYE} termina la chiamata e \texttt{CANCEL} interrompe una richiesta ancora in corso. \texttt{OPTIONS} viene spesso usato per verifiche di capacit\`a e reachability.
+
+Ogni messaggio SIP contiene intestazioni che influenzano il routing e lo stato transazionale. In particolare, campi come \texttt{Via}, \texttt{Route}, \texttt{Record-Route}, \texttt{Contact}, \texttt{Call-ID}, \texttt{CSeq} e \texttt{From}/\texttt{To} determinano il cammino del messaggio e l'associazione con il dialogo. Per un framework di testing, questi elementi sono critici perch\'e consentono di osservare la correttezza della catena di inoltro e di introdurre variazioni mirate per verificare robustezza e conformit\`a.
+
+Un aspetto importante \`e che SIP non si limita a trasportare la richiesta di servizio, ma veicola anche informazioni di negoziazione tramite SDP. Questo significa che il proxy di test deve poter leggere, preservare o modificare selettivamente il contenuto del messaggio senza corrompere la coerenza semantica del dialogo.
+
+\section{Contesto 4G e 5G}
+Dal punto di vista del servizio voce, 4G e 5G sono due contesti di accesso e di core differenti, ma per il framework la logica fondamentale resta la stessa: il terminale usa SIP per registrarsi e instaurare le sessioni, mentre IMS coordina il controllo della chiamata e il trasporto media avviene separatamente. In altri termini, il framework non dipende dal fatto che il dispositivo sia attaccato a una rete EPC 4G oppure a una core 5G basata su servizi.
+
+Le differenze di implementazione tra le due generazioni riguardano soprattutto i nodi interni della rete e i protocolli usati nel core. Nel 4G compaiono elementi come EPC e GTP; nel 5G compaiono componenti SBA, HTTP/2 e PFCP. Tuttavia, da un punto di vista funzionale, questi dettagli sono secondari rispetto al comportamento osservabile sui messaggi IMS e SIP. Per questo motivo, nella tesi vengono trattati come contesto di supporto e non come elemento discriminante del metodo di test.
+
+Questa impostazione consente di progettare scenari validi in entrambi gli ambienti: registrazione, chiamata, rilascio della sessione e negoziazione SDP restano i punti di controllo principali. Il framework pu\`o quindi essere applicato sia in presenza di accesso 4G sia in presenza di accesso 5G, mantenendo invariata la logica di analisi dei messaggi.
+
+\section{Flussi rilevanti per il framework}
+Il framework descritto in questa tesi deve interagire soprattutto con tre famiglie di flussi. La prima \`e la registrazione SIP, in cui il terminale si presenta alla rete e ottiene la possibilit\`a di ricevere o avviare chiamate. La seconda \`e la segnalazione di sessione, in particolare l'instaurazione e la chiusura di una chiamata mediante \texttt{INVITE}, \texttt{ACK}, \texttt{BYE} e messaggi correlati. La terza \`e la negoziazione dei parametri media, che avviene tramite SDP e che deve rimanere coerente con il comportamento osservato sul piano utente.
+
+Da un punto di vista operativo, questi flussi attraversano pi\`u livelli di rete e coinvolgono nodi con responsabilit\`a diverse. Il proxy di test si colloca in una posizione in cui pu\`o osservare la segnalazione, applicare regole di manipolazione controllata e mantenere la compatibilit\`a con il resto della catena IMS. Questo rende possibile eseguire test di conformit\`a, robustezza e sicurezza senza modificare il terminale o l'infrastruttura dell'operatore.
+
+\section{Sintesi}
+IMS fornisce il quadro architetturale entro cui si collocano i servizi vocali su IP, SIP governa la segnalazione applicativa, mentre DNS, Diameter, RTP e i protocolli di core associati al 4G o al 5G intervengono nei livelli di supporto, autenticazione e trasporto. Per la tesi, la conclusione pratica \`e semplice: il comportamento da verificare \`e quello della catena IMS/SIP, indipendentemente dal fatto che la rete sottostante sia 4G o 5G.
+
+Queste nozioni costituiscono la base necessaria per i capitoli successivi: nel Capitolo 3 verranno tradotte in requisiti, casi d'uso e scelte progettuali del framework; nei capitoli seguenti saranno poi riprese per descrivere architettura, implementazione e validazione.

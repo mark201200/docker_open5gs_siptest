@@ -75,9 +75,17 @@ class RuntimeTransportConfig:
 
 
 @dataclass(frozen=True)
+class RuntimeDiscoveryConfig:
+    """Configuration for device discovery method."""
+    method: str = "sip-proxy"  # sip-proxy or open5gs
+    settings: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class RuntimeConfig:
     transport: RuntimeTransportConfig
     devices: Dict[str, DeviceProfile]
+    discovery: RuntimeDiscoveryConfig = field(default_factory=lambda: RuntimeDiscoveryConfig())
 
 
 @dataclass(frozen=True)
@@ -163,6 +171,7 @@ class ComparisonIteration:
     differences: List[str]
     response_a: Optional[SipResponse]
     response_b: Optional[SipResponse]
+    responses_by_device: Dict[str, Optional[SipResponse]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -184,6 +193,19 @@ class ComparisonReport:
     total_cases: int
     cases_with_differences: int
     case_results: List[ComparisonCaseResult]
+    device_ids: List[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        device_ids = [device_id for device_id in self.device_ids if str(device_id).strip()]
+        if not device_ids:
+            device_ids = [device_id for device_id in [self.device_a, self.device_b] if str(device_id).strip()]
+
+        object.__setattr__(self, "device_ids", device_ids)
+
+        if device_ids and not str(self.device_a).strip():
+            object.__setattr__(self, "device_a", device_ids[0])
+        if len(device_ids) > 1 and not str(self.device_b).strip():
+            object.__setattr__(self, "device_b", device_ids[1])
 
     @property
     def differences_found(self) -> bool:

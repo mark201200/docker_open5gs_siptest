@@ -349,6 +349,7 @@ services:
       - NET_ADMIN
     volumes:
       - ./pcscf:/mnt/pcscf
+      - ./kamailio_rpc:/var/run/kamailio
       - /etc/timezone:/etc/timezone:ro
       - /etc/localtime:/etc/localtime:ro
     env_file:

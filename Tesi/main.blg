@@ -8,7 +8,6 @@ A level-1 auxiliary file: Capitolo3.aux
 A level-1 auxiliary file: Capitolo4.aux
 A level-1 auxiliary file: Capitolo5.aux
 A level-1 auxiliary file: Capitolo6.aux
-A level-1 auxiliary file: Capitolo7.aux
 The style file: IEEEtran.bst
 Reallocated singl_function (elt_size=4) to 100 items from 50.
 Reallocated singl_function (elt_size=4) to 100 items from 50.
@@ -24,7 +23,7 @@ Warning--empty journal in dummy
 Done.
 You've used 1 entry,
             4087 wiz_defined-function locations,
-            834 strings with 7431 characters,
+            833 strings with 7418 characters,
 and the built_in function-call counts, 419 in all, are:
 = -- 22
 > -- 4

@@ -268,18 +268,22 @@ class DifferentialTestRunner:
     def run(
         self,
         suite: TestSuite,
-        device_a: DeviceProfile,
-        device_b: DeviceProfile,
-        *,
+        *devices: DeviceProfile,
         wait_for_enter_between_cases: bool = True,
     ) -> ComparisonReport:
+        if len(devices) < 2:
+            raise RuntimeError("compare mode requires at least two devices")
+
         started = utc_now_iso()
+        selected_device_ids = [device.device_id for device in devices]
 
         case_results: List[ComparisonCaseResult] = []
         try:
             total_cases = len(suite.cases)
             for case_index, case in enumerate(suite.cases, start=1):
-                case_results.append(self._run_case(case, suite.default_timeout_seconds, suite.suite_id, device_a, device_b))
+                case_results.append(
+                    self._run_case(case, suite.default_timeout_seconds, suite.suite_id, list(devices))
+                )
                 _pause_before_next_case(case_index, total_cases, wait_for_enter_between_cases)
         finally:
             _replace_live_edit_rules(self.transport, [])
@@ -288,13 +292,14 @@ class DifferentialTestRunner:
         return ComparisonReport(
             suite_id=suite.suite_id,
             suite_title=suite.title,
-            device_a=device_a.device_id,
-            device_b=device_b.device_id,
+            device_a=devices[0].device_id,
+            device_b=devices[1].device_id,
             started_at_utc=started,
             finished_at_utc=utc_now_iso(),
             total_cases=len(case_results),
             cases_with_differences=cases_with_differences,
             case_results=case_results,
+            device_ids=selected_device_ids,
         )
 
     def _run_case(
@@ -302,8 +307,7 @@ class DifferentialTestRunner:
         case: TestCase,
         default_timeout_seconds: float,
         suite_id: str,
-        device_a: DeviceProfile,
-        device_b: DeviceProfile,
+        devices: List[DeviceProfile],
     ) -> ComparisonCaseResult:
         if case.message.intercept_only:
             raise RuntimeError(
@@ -320,80 +324,72 @@ class DifferentialTestRunner:
         iterations: List[ComparisonIteration] = []
 
         for iteration in range(1, count + 1):
-            sent_message_a = _render_message_for_device(
-                modifier=self.modifier,
-                device=device_a,
-                template=case.message.template,
-                edits=case.message.edits,
-            )
-            sent_message_b = _render_message_for_device(
-                modifier=self.modifier,
-                device=device_b,
-                template=case.message.template,
-                edits=case.message.edits,
-            )
+            sent_messages: Dict[str, str] = {}
+            correlation_ids: Dict[str, str] = {}
+            responses_by_device: Dict[str, Optional[SipResponse]] = {}
 
-            print(
-                f"Sending {_message_type_label(case.message.message_type)} message to device {_device_label(device_a)}"
-            )
-            correlation_a = self.transport.send(
-                device_a,
-                sent_message_a,
-                {
-                    "suite_id": suite_id,
-                    "case_id": case.case_id,
-                    "iteration": iteration,
-                    "message_type": case.message.message_type,
-                    "device_role": "A",
-                },
-            )
-            print(
-                f"Sending {_message_type_label(case.message.message_type)} message to device {_device_label(device_b)}"
-            )
-            correlation_b = self.transport.send(
-                device_b,
-                sent_message_b,
-                {
-                    "suite_id": suite_id,
-                    "case_id": case.case_id,
-                    "iteration": iteration,
-                    "message_type": case.message.message_type,
-                    "device_role": "B",
-                },
-            )
-
-            print(
-                f"Waiting for {_message_type_label(case.message.message_type)} response from device {_device_label(device_a)}"
-            )
-            responses_a = list(self.transport.read(device_a, correlation_a, timeout_seconds))
-            if responses_a:
-                print(
-                    f"Received {_format_response_summary(responses_a[0])} response from device {_device_label(device_a)}"
+            for device_index, device in enumerate(devices):
+                sent_messages[device.device_id] = _render_message_for_device(
+                    modifier=self.modifier,
+                    device=device,
+                    template=case.message.template,
+                    edits=case.message.edits,
                 )
-            else:
-                print(f"Received no response from device {_device_label(device_a)}")
 
-            print(
-                f"Waiting for {_message_type_label(case.message.message_type)} response from device {_device_label(device_b)}"
-            )
-            responses_b = list(self.transport.read(device_b, correlation_b, timeout_seconds))
-            if responses_b:
                 print(
-                    f"Received {_format_response_summary(responses_b[0])} response from device {_device_label(device_b)}"
+                    f"Sending {_message_type_label(case.message.message_type)} message to device {_device_label(device)}"
                 )
-            else:
-                print(f"Received no response from device {_device_label(device_b)}")
+                correlation_ids[device.device_id] = self.transport.send(
+                    device,
+                    sent_messages[device.device_id],
+                    {
+                        "suite_id": suite_id,
+                        "case_id": case.case_id,
+                        "iteration": iteration,
+                        "message_type": case.message.message_type,
+                        "device_index": device_index,
+                        "device_role": chr(ord("A") + device_index) if device_index < 26 else str(device_index + 1),
+                    },
+                )
 
-            response_a = responses_a[0] if responses_a else None
-            response_b = responses_b[0] if responses_b else None
+            for device in devices:
+                print(
+                    f"Waiting for {_message_type_label(case.message.message_type)} response from device {_device_label(device)}"
+                )
+                responses = list(
+                    self.transport.read(device, correlation_ids[device.device_id], timeout_seconds)
+                )
+                response = responses[0] if responses else None
+                responses_by_device[device.device_id] = response
+                if response is not None:
+                    print(
+                        f"Received {_format_response_summary(response)} response from device {_device_label(device)}"
+                    )
+                else:
+                    print(f"Received no response from device {_device_label(device)}")
 
-            differences = self._compare_responses(response_a, response_b)
+            baseline_device = devices[0]
+            baseline_response = responses_by_device.get(baseline_device.device_id)
+
+            differences: List[str] = []
+            for device in devices[1:]:
+                differences.extend(
+                    self._compare_responses(
+                        baseline_response,
+                        responses_by_device.get(device.device_id),
+                        baseline_device.device_id,
+                        device.device_id,
+                    )
+                )
+
+            second_device_response = responses_by_device.get(devices[1].device_id) if len(devices) > 1 else None
             iterations.append(
                 ComparisonIteration(
                     iteration=iteration,
                     differences=differences,
-                    response_a=response_a,
-                    response_b=response_b,
+                    response_a=baseline_response,
+                    response_b=second_device_response,
+                    responses_by_device=responses_by_device,
                 )
             )
 
@@ -407,37 +403,61 @@ class DifferentialTestRunner:
             iterations=iterations,
         )
 
-    def _compare_responses(self, response_a: Optional[SipResponse], response_b: Optional[SipResponse]) -> List[str]:
+    def _compare_responses(
+        self,
+        response_a: Optional[SipResponse],
+        response_b: Optional[SipResponse],
+        device_a_id: str,
+        device_b_id: str,
+    ) -> List[str]:
         differences: List[str] = []
 
         if response_a is None and response_b is None:
             return differences
         if response_a is None:
-            differences.append("device A produced no response")
+            differences.append(f"baseline device {device_a_id} produced no response")
             return differences
         if response_b is None:
-            differences.append("device B produced no response")
+            differences.append(f"device {device_b_id} produced no response")
             return differences
 
         if response_a.status_code != response_b.status_code:
-            differences.append(f"status_code differs: A={response_a.status_code}, B={response_b.status_code}")
+            differences.append(
+                f"status_code differs: A={response_a.status_code}, B={response_b.status_code}"
+            )
 
-        if response_a.reason_phrase != response_b.reason_phrase:
+        if response_a.reason_phrase.strip() != response_b.reason_phrase.strip():
             differences.append(
                 f"reason_phrase differs: A='{response_a.reason_phrase}', B='{response_b.reason_phrase}'"
             )
 
-        all_headers = sorted(set(response_a.headers.keys()) | set(response_b.headers.keys()))
+        normalized_headers_a = _normalize_sip_headers(response_a.headers)
+        normalized_headers_b = _normalize_sip_headers(response_b.headers)
+        all_headers = sorted(set(normalized_headers_a.keys()) | set(normalized_headers_b.keys()))
         for header_name in all_headers:
-            values_a = response_a.headers.get(header_name, [])
-            values_b = response_b.headers.get(header_name, [])
+            values_a = normalized_headers_a.get(header_name, [])
+            values_b = normalized_headers_b.get(header_name, [])
             if values_a != values_b:
                 differences.append(f"header '{header_name}' differs: A={values_a}, B={values_b}")
 
-        if response_a.body != response_b.body:
+        if _normalize_sip_body(response_a.body) != _normalize_sip_body(response_b.body):
             differences.append("response body differs")
 
         return differences
+
+
+def _normalize_sip_headers(headers: Mapping[str, List[str]]) -> Dict[str, List[str]]:
+    normalized: Dict[str, List[str]] = {}
+    for header_name, values in headers.items():
+        cleaned_values = sorted({str(value).strip() for value in values if str(value).strip()})
+        if cleaned_values:
+            normalized[header_name.lower().strip()] = cleaned_values
+    return normalized
+
+
+def _normalize_sip_body(body: str) -> str:
+    normalized_lines = [line.rstrip() for line in str(body).replace("\r\n", "\n").split("\n")]
+    return "\n".join(normalized_lines).strip()
 
 
 def _device_metadata_value(device: DeviceProfile, *keys: str) -> str:

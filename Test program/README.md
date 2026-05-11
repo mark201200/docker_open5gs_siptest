@@ -12,12 +12,14 @@ The code is interface-first so transport and message I/O backends can be impleme
 - ims_tester/models.py: domain models and report models.
 - ims_tester/interfaces.py: interfaces for message send/read/modify and transport factory.
 - ims_tester/editor.py: default SIP message modifier implementation.
-- ims_tester/adapters.py: pluggable transport registry with `stub` and `sip-proxy-http` backends.
+- ims_tester/adapters.py: pluggable transport registry with `stub` and `sip-proxy-http` backends, plus device discoverers.
 - ims_tester/config.py: YAML config loaders and validation.
 - ims_tester/engine.py: standard and differential runners.
 - ims_tester/cli.py: command line app.
 - docs/test-config.md: schema documentation for test suite files.
 - docs/runtime-config.md: schema documentation for runtime files.
+- docs/discovery-methods.md: documentation for device discovery methods (sip-proxy vs open5gs).
+- docs/user-manual.md: user manual with CLI modes and commands.
 - examples/: sample YAML files.
 
 ## Quick Start
@@ -42,6 +44,8 @@ The code is interface-first so transport and message I/O backends can be impleme
 6. Run standard mode without `--device` (interactive selection from generated device list):
 
    python main.py run-standard --test-config examples/test_suite_register.yaml --runtime-config examples/runtime_sip_proxy_http.yaml
+
+   In the prompt, enter one or more device numbers or IDs separated by commas, for example `1,2` or `1,2,3`.
 
 7. Run differential mode:
 
@@ -71,7 +75,7 @@ The code is interface-first so transport and message I/O backends can be impleme
 
 - validate: validates a test suite YAML file.
 - list-devices: prints configured devices plus SIP REGISTER-discovered devices (sip-proxy-http).
-- run-standard: executes expected-response checks for one device; if `--device` is omitted, prompts from available devices.
+- run-standard: executes expected-response checks for one or more devices; if `--device` is omitted, prompts from available devices.
 - compare: executes two-device response comparison.
 - live-edit-list: prints currently active ims_proxy live edit rules.
 - live-edit-clear: removes all active ims_proxy live edit rules.

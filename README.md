@@ -398,6 +398,8 @@ A Python SIP proxy container is integrated for Kamailio IMS deployments in:
 The proxy is placed on the core-facing side of P-CSCF, so UE-facing IPSec remains terminated at P-CSCF.
 This avoids IPSec integrity/authentication issues while still allowing SIP inspection/modification/injection.
 The proxy listens on both UDP and TCP for SIP on `SIP_PROXY_PORT`.
+The `sip_proxy.py` file is bind-mounted into the container, so you can edit it on the host and restart
+`sip_proxy` without rebuilding the image.
 
 ### Enable or disable
 

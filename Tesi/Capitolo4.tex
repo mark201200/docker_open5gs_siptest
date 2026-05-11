@@ -1,6 +1,106 @@
-\chapter{Architettura del framework}
-\begin{minipage}{12cm}\textit{Questo capitolo illustra l'architettura complessiva della soluzione, i componenti principali e le loro interazioni.}
+\chapter{Implementazione}
+\begin{minipage}{12cm}\textit{Questo capitolo presenta le principali scelte di implementazione, i moduli sviluppati e le soluzioni adottate per mantenere il codice estendibile e manutenibile.}
 \end{minipage}
 \vspace*{1cm}
 
-Descrivere moduli, flussi di comunicazione, separazione tra motore di test e componente di proxy, e il ruolo dell'approccio a plugin.
+L'architettura presentata nel capitolo precedente \`e stata tradotta in una soluzione concreta che integra programmazione Python, configurazioni dichiarative, script di inizializzazione e orchestrazione tramite Docker. L'obiettivo principale \`e stato costruire un sistema di test riusabile, capace di eseguire verifiche di conformit\`a SIP su dispositivi IMS reali o simulati, ma anche di confrontare il comportamento di due terminali in modalit\`a differenziale.
+
+Una parte rilevante del lavoro \`e consistita nel trasformare scelte architetturali in decisioni operative verificabili. In questa prospettiva, l'implementazione non si limita a descrivere i componenti realizzati, ma mostra anche perch\'e alcune soluzioni sono state preferite ad altre: l'uso di Python come linguaggio applicativo, l'adozione di YAML per la configurazione, l'integrazione del proxy nella rete Docker del laboratorio e la separazione tra logica di test e trasporto.
+
+Dal punto di vista tecnologico il progetto si basa su Python 3.10 o superiore, sul caricamento di file YAML per la configurazione e su una suite di test automatici per la verifica del comportamento. La piattaforma di esecuzione \`e Docker, mentre i servizi di rete e i componenti IMS sono descritti in modo dichiarativo e inizializzati con script che sostituiscono parametri e indirizzi nei template.
+
+La scelta di separare la logica di test dal trasporto ha permesso di mantenere la soluzione indipendente dal contenuto specifico del laboratorio. In questo modo la stessa suite pu\`o essere eseguita sia in un contesto offline, tramite componenti simulati, sia contro un proxy SIP reale oppure attraverso un percorso di inoltro verso il P-CSCF.
+
+\section{Scelte di implementazione e motivazioni}
+
+La prima scelta significativa \`e stata adottare Python come linguaggio principale del framework. Questa decisione \`e stata guidata da tre considerazioni. In primo luogo, Python consente di sviluppare rapidamente componenti di orchestration, parsing e validazione senza introdurre complessit\`a superflua. In secondo luogo, la sua sintassi leggibile facilita la manutenzione del codice e la revisione delle logiche di test. Infine, la disponibilit\`a di librerie mature per la gestione di YAML, HTTP, JSON e test automatici si sposa bene con la natura del progetto, che integra configurazione dichiarativa, trasporto di controllo e produzione di report.
+
+La seconda scelta \`e stata l'uso di YAML per descrivere sia le suite di test sia il runtime di esecuzione. Questo formato \`e stato preferito perch\'e esprime in modo chiaro strutture gerarchiche, liste di casi e parametri di configurazione, mantenendo allo stesso tempo un buon compromesso tra leggibilit\`a umana e validabilit\`a automatica. Per una tesi orientata alla sperimentazione, questa caratteristica \`e fondamentale: la configurazione deve essere comprensibile, modificabile e facilmente confrontabile tra una prova e l'altra.
+
+La terza scelta \`e stata l'impiego di Docker come base del laboratorio. L'obiettivo non era soltanto isolare le dipendenze, ma rendere replicabile l'intero ambiente di test. Per questo motivo i componenti del core, i servizi di supporto, i simulatori e il proxy sono stati inseriti in una rete Docker comune, in modo da poter comunicare tra loro in modo deterministico. In particolare, il proxy \`e stato incluso nella stessa rete dei servizi IMS per poter osservare e instradare correttamente il traffico SIP senza introdurre ulteriori livelli di astrazione. Questa soluzione semplifica il deployment, riduce i problemi legati alla configurazione degli indirizzi e rende pi\`u chiaro il percorso dei messaggi durante le prove.
+
+La quarta scelta \`e stata mantenere il traffico SIP il pi\`u possibile vicino alla forma originale. Il framework tratta i messaggi come testo raw e applica trasformazioni minime e controllate soltanto dove necessario. Questa impostazione \`e stata adottata per non introdurre correzioni automatiche che avrebbero potuto alterare il significato dei test, soprattutto nei casi in cui l'oggetto della verifica \`e proprio il comportamento del dispositivo davanti a messaggi incompleti, non standard o volutamente malformati.
+
+La quinta scelta \`e stata rendere il sistema estendibile attraverso astrazioni semplici e ben definite. Il motore di test non conosce i dettagli del backend concreto, ma si limita a usare interfacce comuni per l'invio, la ricezione e la discovery. In questo modo \`e possibile aggiungere nuovi meccanismi di trasporto senza riscrivere la logica di esecuzione o la definizione delle suite.
+
+Dal punto di vista operativo, queste scelte si traducono in una soluzione che mostra con chiarezza cosa \`e stato realizzato: un motore di test in Python, una configurazione in YAML, un laboratorio containerizzato in Docker e un proxy integrato nella stessa rete dei servizi IMS. La combinazione di questi elementi consente di passare da una descrizione astratta del sistema a un'implementazione concreta, ripetibile e adatta alla validazione sperimentale.
+
+\section{Stack tecnologico e organizzazione del codice}
+
+L'applicazione di test \`e distribuita come pacchetto Python e viene esposta tramite un'interfaccia a riga di comando. Il cuore dell'implementazione \`e organizzato in componenti con responsabilit\`a ben distinte.
+
+Una parte si occupa dell'interazione con l'utente e della gestione delle modalit\`a operative principali: validazione dei test, elencazione dei dispositivi disponibili, esecuzione standard, confronto differenziale e gestione delle regole di live edit. Un'altra parte si occupa del caricamento e della validazione delle configurazioni, mentre il livello di dominio rappresenta suite di test, dispositivi, risposte, report ed errori di configurazione.
+
+La modifica dei messaggi SIP \`e affidata a un componente dedicato che applica trasformazioni minime e controllate, mentre il motore di esecuzione gestisce sia la verifica di conformit\`a sia il confronto tra due terminali. I trasporti sono raccolti e registrati in modo da rendere aggiungibili nuovi backend senza modificare il flusso principale.
+
+La struttura \`e volutamente interface-first. Sono definite astrazioni per l'invio e la lettura dei messaggi SIP, per la modifica dei template e per la creazione dei trasporti. Questa scelta riduce il legame tra il motore di test e la rete sottostante e rende possibile sostituire un backend con un altro senza toccare la logica di validazione.
+
+\section{Configurazione e modello dei dati}
+
+Il comportamento del programma \`e guidato da due famiglie di file YAML. I file di test descrivono il contenuto della suite, ossia i casi da eseguire, i messaggi SIP da inviare, le modifiche da applicare e le risposte attese. I file runtime, invece, descrivono il contesto di esecuzione: trasporto scelto, parametri di discovery e anagrafica dei dispositivi.
+
+Questa separazione \`e importante perch\'e consente di riutilizzare la stessa suite su pi\`u piattaforme. Un test che verifica, ad esempio, la corretta risposta a una registrazione pu\`o essere eseguito sia contro un telefono fisico sia contro un dispositivo scoperto dinamicamente tramite traffico SIP osservato dal proxy. Il runtime decide solo come raggiungerlo e con quale backend parlare.
+
+Durante il caricamento viene applicata una validazione strutturale e semantica. Vengono verificati i campi obbligatori, la forma dei documenti YAML e la coerenza tra configurazione e modalit\`a di esecuzione. In caso di errore vengono restituiti messaggi leggibili, cos\`i da semplificare la diagnosi dei problemi di setup.
+
+Il modello dati rappresenta esplicitamente i concetti usati dal dominio: dispositivo, risposta SIP, caso di test, report di compliance e report di confronto. Questa modellazione rende pi\`u semplice serializzare i risultati in formato JSON, stampare report leggibili in console e alimentare eventuali strumenti esterni di analisi.
+
+\section{CLI e flussi operativi}
+
+L'applicazione espone un insieme di sottocomandi che riflettono i casi d'uso reali del framework. Sono previste funzioni per controllare la correttezza di una suite YAML, mostrare i dispositivi configurati e quelli eventualmente scoperti, eseguire una suite su uno o pi\`u dispositivi e lanciare il confronto differenziale tra due terminali.
+
+Sono presenti anche funzioni dedicate alle regole di live edit, che consentono di ispezionare e ripulire le regole di intercettazione mantenute dal proxy SIP. Questa funzionalit\`a \`e utile soprattutto durante il debugging, perch\'e permette di verificare lo stato del proxy senza accedere direttamente ai suoi meccanismi interni.
+
+Il flusso di esecuzione in modalit\`a standard inizia caricando suite e runtime. Successivamente il programma attiva il trasporto richiesto, apre la connessione e prepara il modificatore SIP di default. Se il runtime supporta la discovery dei dispositivi, la lista disponibile viene aggiornata prima della selezione. Quando l'utente non specifica un singolo device, l'interfaccia permette di scegliere uno o pi\`u dispositivi dalla lista e, in presenza di selezione multipla, passa automaticamente alla comparazione differenziale.
+
+In questo modo il comportamento della CLI rimane coerente con il dominio: una suite pu\`o essere eseguita come test di conformit\`a puntuale oppure come strumento di confronto tra due terminali, senza duplicare il codice di invio e validazione.
+
+\section{Motore di esecuzione dei test}
+
+Il motore di esecuzione \`e responsabile della traduzione tra configurazione e azioni concrete sul trasporto. Una modalit\`a esegue i casi previsti dalla suite su un singolo dispositivo, mentre l'altra ripete gli stessi input su due dispositivi e confronta gli esiti ottenuti. Entrambe utilizzano la stessa interfaccia di trasporto e lo stesso modificatore dei messaggi, cos\`i da mantenere allineata la logica di costruzione dei test vettoriali.
+
+Il ciclo di esecuzione segue una sequenza precisa: preparazione del messaggio SIP, applicazione delle modifiche definite nel test, invio del messaggio tramite backend, attesa delle risposte e confronto con il risultato atteso. Questa sequenza \`e stata pensata per distinguere chiaramente tre livelli: il contenuto del test, il trasporto di rete e la logica di validazione.
+
+Nei casi in cui il test richiede attesa interattiva tra un caso e il successivo, il runner pu\`o sospendere l'esecuzione fino alla conferma dell'operatore. Questo comportamento \`e utile durante campagne manuali o quando si vuole osservare sul campo il traffico prodotto dal dispositivo sotto test.
+
+L'output finale viene convertito in report di compliance o di comparazione e, se richiesto, pu\`o essere scritto anche in formato JSON. In questo modo i risultati non restano confinati alla sola console ma possono essere consumati da pipeline esterne o archiviati per successive analisi.
+
+\section{Gestione dei messaggi SIP}
+
+Uno degli aspetti pi\`u delicati dell'implementazione riguarda la manipolazione dei messaggi SIP, in particolare quando i casi di test devono preservare comportamenti non perfettamente conformi o messaggi deliberatamente malformati. Il sistema opera sul template testuale del messaggio senza ricostruire completamente il contenuto a partire da una struttura astratta, proprio per evitare di normalizzare campi che il test vuole mantenere invariati.
+
+L'approccio seguito \`e quindi conservativo: il messaggio viene trattato come testo SIP raw e le modifiche vengono applicate solo dove esplicitamente richiesto dalla suite. Questo consente di testare anche scenari di robustezza, ad esempio intestazioni duplicate, valori incoerenti o formati parzialmente invalidi, senza che il sistema corregga automaticamente il payload.
+
+Il rendering supporta anche placeholder dinamici legati al dispositivo selezionato. In questo modo un singolo template pu\`o essere riutilizzato su pi\`u terminali e adattarsi all'identit\`a del device in esecuzione. La sostituzione dei placeholder viene eseguita in fase di preparazione del caso, prima dell'invio al backend, cos\`i da mantenere il comportamento deterministico e tracciabile.
+
+\section{Backend di trasporto e protocolli di comunicazione}
+
+L'implementazione supporta pi\`u backend, ognuno pensato per un contesto operativo diverso. Un backend simulato \`e utile in fase di sviluppo e test automatici: non contatta elementi di rete reali e restituisce risposte SIP preconfigurate. Questo rende possibile esercitare la soluzione anche in assenza del laboratorio completo.
+
+Un altro backend funge da ponte tra il programma di test e un servizio di proxy che espone una API HTTP dedicata. In questo caso il messaggio SIP viaggia come stringa raw dentro un payload JSON, mentre la comunicazione di controllo usa HTTP/1.1. Il client verifica lo stato del proxy, invia i messaggi, legge le risposte e gestisce l'inventario dei dispositivi tramite endpoint dedicati. Le regole di live edit sono gestite con operazioni specifiche, inclusa l'attesa di eventi di intercettazione.
+
+Un terzo backend rappresenta una modalit\`a di inoltro verso il P-CSCF. In questo scenario il programma di test inserisce un'indicazione dedicata per specificare la destinazione del messaggio e lascia al proxy il compito di reinoltrarlo verso il terminale selezionato. Questa soluzione consente di mantenere il comportamento IMS del proxy inalterato per il traffico normale, aggiungendo al tempo stesso un punto di iniezione controllato per i test.
+
+Dal punto di vista dei protocolli, il progetto utilizza quindi un insieme eterogeneo di tecnologie coerenti con l'ambiente IMS e 5G: SIP/2.0 su UDP o TCP per i messaggi applicativi, HTTP/1.1 e JSON per il canale di controllo con il proxy, Diameter su TCP o SCTP per il collegamento con gli elementi core che gestiscono identit\`a e autenticazione, e i protocolli di rete mobile tipici della piattaforma Open5GS, come SBI, NGAP, PFCP e GTP-U, per l'interazione tra i nodi di core network.
+
+\section{Piattaforma Docker e deployment}
+
+La base di esecuzione del progetto \`e Docker, scelto per rendere replicabile l'intero laboratorio e per isolare le dipendenze dei singoli componenti. I servizi sono descritti in pi\`u manifest di composizione, uno per ciascuno scenario: sola rete 5G, rete 4G con VoLTE, VoNR, integrazioni con OpenSIPS, e varianti con ePDG, OCS o componenti di simulazione radio.
+
+La composizione dei servizi segue una logica modulare: i container del core network, i database, i componenti IMS e i simulatori di accesso radio vengono avviati come unit\`a indipendenti ma collegate da reti Docker dedicate. Le configurazioni dei singoli nodi vengono generate a partire da template contenenti parametri segnaposto, sostituiti all'avvio da script di inizializzazione tramite variabili d'ambiente. Questo approccio semplifica il riuso dei medesimi file tra ambienti differenti, cambiando solo indirizzi IP, MCC, MNC, port e range di rete.
+
+Sul piano operativo, sono previste immagini base e manifest di deployment per gli scenari pi\`u rilevanti. Il laboratorio pu\`o essere avviato su un singolo host oppure distribuito su pi\`u macchine, ad esempio separando il nodo radio dall'insieme EPC/5GC e IMS. Sono previste configurazioni sia OTA sia RF-simulated, con supporto a srsRAN, UERANSIM e ad altri elementi di test.
+
+Questa impostazione rende la piattaforma sufficientemente flessibile per il lavoro di validazione: lo stesso framework di test pu\`o essere eseguito in un ambiente leggero, basato su backend simulati, oppure in un deployment completo che coinvolge l'intera catena di segnalazione.
+
+\section{Validazione automatica e manutenzione}
+
+Per ridurre il rischio di regressioni, il progetto include una suite di test automatici. I test coprono il caricamento della configurazione, il parsing dei file YAML, la logica dell'interfaccia a riga di comando, la modifica dei messaggi SIP, i backend di trasporto e la generazione dei report. Questa copertura non serve solo a verificare il corretto funzionamento delle singole parti, ma anche a documentare il comportamento atteso dei componenti principali.
+
+La presenza di esempi pronti all'uso \`e stata fondamentale anche dal punto di vista manutentivo. Ogni nuovo scenario pu\`o essere descritto attraverso una combinazione di suite YAML e runtime YAML, senza introdurre nuove parti di logica nel motore di esecuzione. In altre parole, l'estensione del framework passa pi\`u spesso dalla configurazione che dalla modifica dell'applicazione.
+
+\section{Sintesi}
+
+L'implementazione del framework \`e stata costruita per coniugare flessibilit\`a e robustezza. Python fornisce il livello applicativo del sistema di test, YAML descrive in modo dichiarativo test e runtime, gli script di inizializzazione e Docker si occupano del deployment della piattaforma, mentre SIP, HTTP, Diameter e gli altri protocolli di rete caratterizzano l'integrazione con il laboratorio IMS e 5G.
+
+La scelta pi\`u importante \`e stata quella di separare chiaramente la logica di test dal trasporto sottostante. Grazie a questa impostazione il sistema pu\`o operare sia in modalit\`a offline, sia contro un proxy SIP reale, sia in uno scenario di forwarding verso il P-CSCF. Questa modularit\`a costituisce la base tecnica che rende il framework estendibile e adatto a campagne di validazione successive.

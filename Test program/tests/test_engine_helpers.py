@@ -37,6 +37,28 @@ def test_render_message_for_device_substitutes_placeholders_in_template_and_edit
     assert "X-pixel_8: 10.0.0.10" in rendered
 
 
+def test_render_message_for_device_substitutes_phone_number_tokens(device_pixel) -> None:
+    template = (
+        "INVITE tel:$PHONE SIP/2.0\r\n"
+        "To: <$PHONE_TEL_URI>\r\n"
+        "P-Asserted-Identity: <$PHONE_SIP_URI>\r\n"
+        "X-Phone: $PHONE_NUMBER\r\n"
+        "\r\n"
+    )
+
+    rendered = _render_message_for_device(
+        modifier=BasicSipMessageModifier(),
+        device=device_pixel,
+        template=template,
+        edits=[],
+    )
+
+    assert "INVITE tel:15551234567 SIP/2.0" in rendered
+    assert "To: <tel:15551234567>" in rendered
+    assert "P-Asserted-Identity: <sip:15551234567>" in rendered
+    assert "X-Phone: 15551234567" in rendered
+
+
 def test_extract_host_from_target_handles_sip_uris_and_ipv6() -> None:
     assert _extract_host_from_target("sip:alice@10.0.0.10:5060;transport=udp") == "10.0.0.10"
     assert _extract_host_from_target("<sip:[2001:db8::1]:5060>") == "2001:db8::1"

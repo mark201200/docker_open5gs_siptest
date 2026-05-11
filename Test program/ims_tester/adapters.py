@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import socket
+import threading
 import time
 import urllib.error
 import urllib.request
 import uuid
-from typing import Any, Callable, Dict, List, Mapping
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from .interfaces import SipTransport
 from .models import DeviceProfile, SipResponse
@@ -411,11 +413,476 @@ class SipProxyHttpTransport(SipTransport):
         return dict(parsed)
 
 
+class KamailioForwardTransport(SipTransport):
+    """
+    Forward SIP messages to P-CSCF with a special header that indicates
+    the target device.
+
+    This transport uses UDP and injects a top Via header so responses
+    can be correlated back to the test runner.
+    """
+
+    def __init__(self, settings: Mapping[str, Any] | None = None) -> None:
+        self.settings: Dict[str, Any] = dict(settings or {})
+
+        self.pcscf_host = str(self.settings.get("pcscf_host", "")).strip()
+        if not self.pcscf_host:
+            raise ValueError("kamailio-forward transport requires settings.pcscf_host")
+
+        self.pcscf_port = int(self.settings.get("pcscf_port", 5060) or 5060)
+        self.pcscf_transport = str(self.settings.get("pcscf_transport", "udp")).strip().lower() or "udp"
+        if self.pcscf_transport != "udp":
+            raise ValueError("kamailio-forward transport currently supports UDP only")
+
+        self.listen_host = str(self.settings.get("listen_host", "0.0.0.0")).strip() or "0.0.0.0"
+        self.listen_port = int(self.settings.get("listen_port", 0) or 0)
+        self.advertised_host = str(self.settings.get("advertised_host", "")).strip()
+        if not self.advertised_host:
+            if self.listen_host not in {"0.0.0.0", "::", ""}:
+                self.advertised_host = self.listen_host
+            else:
+                raise ValueError(
+                    "kamailio-forward transport requires settings.advertised_host when listen_host is wildcard"
+                )
+
+        self.header_name = str(self.settings.get("target_header", "X-IMS-Tester-Target")).strip()
+        if not self.header_name:
+            raise ValueError("kamailio-forward transport requires settings.target_header")
+
+        self.default_target_port = int(self.settings.get("default_target_port", 5060) or 5060)
+        self.default_target_transport = (
+            str(self.settings.get("default_target_transport", "udp")).strip().lower() or "udp"
+        )
+        if self.default_target_transport not in {"udp", "tcp"}:
+            self.default_target_transport = "udp"
+
+        self.inject_via = bool(self.settings.get("inject_via", True))
+        self.via_branch_prefix = (
+            str(self.settings.get("via_branch_prefix", "z9hG4bK-ims-tester-")).strip()
+            or "z9hG4bK-ims-tester-"
+        )
+
+        self.max_buffered_responses = int(self.settings.get("max_buffered_responses", 32) or 32)
+
+        self._socket: Optional[socket.socket] = None
+        self._receiver_thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+        self._opened = False
+
+        self._lock = threading.Lock()
+        self._branch_to_correlation: Dict[str, str] = {}
+        self._correlation_to_branch: Dict[str, str] = {}
+        self._responses: Dict[str, List[str]] = {}
+        self._response_events: Dict[str, threading.Event] = {}
+
+    def open(self) -> None:
+        if self._opened:
+            return
+
+        sock = self._bind_udp_socket(self.listen_host, self.listen_port)
+        self._socket = sock
+        self.listen_port = int(sock.getsockname()[1])
+
+        self._stop_event.clear()
+        self._receiver_thread = threading.Thread(
+            target=self._receive_loop,
+            name="KamailioForwardTransport",
+            daemon=True,
+        )
+        self._receiver_thread.start()
+        self._opened = True
+
+    def close(self) -> None:
+        self._opened = False
+        self._stop_event.set()
+
+        if self._socket is not None:
+            try:
+                self._socket.close()
+            except OSError:
+                pass
+
+        if self._receiver_thread is not None:
+            self._receiver_thread.join(timeout=1.0)
+
+        with self._lock:
+            self._branch_to_correlation.clear()
+            self._correlation_to_branch.clear()
+            self._responses.clear()
+            self._response_events.clear()
+
+    def send(self, device: DeviceProfile, raw_message: str, context: Mapping[str, Any]) -> str:
+        self._ensure_open()
+        correlation_id = uuid.uuid4().hex
+        branch = self._build_branch(correlation_id)
+        target_uri = self._resolve_target_uri(device, context)
+        rendered = self._build_forward_message(raw_message, target_uri, branch)
+
+        with self._lock:
+            self._branch_to_correlation[branch] = correlation_id
+            self._correlation_to_branch[correlation_id] = branch
+            self._responses.setdefault(correlation_id, [])
+            event = self._response_events.setdefault(correlation_id, threading.Event())
+            event.clear()
+
+        payload = rendered.encode("latin1", errors="replace")
+        assert self._socket is not None
+        self._socket.sendto(payload, (self.pcscf_host, self.pcscf_port))
+        return correlation_id
+
+    def read(self, device: DeviceProfile, correlation_id: str, timeout_seconds: float) -> List[SipResponse]:
+        self._ensure_open()
+        responses = self._drain_responses(correlation_id)
+        if responses:
+            return [SipResponse.parse(raw) for raw in responses]
+
+        wait_timeout = timeout_seconds if timeout_seconds > 0 else 0.0
+        if wait_timeout == 0.0:
+            return []
+
+        event = self._response_events.setdefault(correlation_id, threading.Event())
+        event.clear()
+        event.wait(timeout=wait_timeout)
+        event.clear()
+
+        responses = self._drain_responses(correlation_id)
+        return [SipResponse.parse(raw) for raw in responses]
+
+    def _ensure_open(self) -> None:
+        if not self._opened or self._socket is None:
+            raise RuntimeError("Transport is not open")
+
+    def _bind_udp_socket(self, host: str, port: int) -> socket.socket:
+        addr_info = socket.getaddrinfo(host, port, 0, socket.SOCK_DGRAM)
+        if not addr_info:
+            raise RuntimeError(f"Unable to resolve listen address {host}:{port}")
+
+        family, socktype, proto, _, sockaddr = addr_info[0]
+        sock = socket.socket(family, socktype, proto)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.settimeout(0.2)
+        sock.bind(sockaddr)
+        return sock
+
+    def _receive_loop(self) -> None:
+        assert self._socket is not None
+        while not self._stop_event.is_set():
+            try:
+                data, _ = self._socket.recvfrom(65535)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+
+            raw = data.decode("latin1", errors="replace")
+            branch = self._extract_top_via_branch(raw)
+            if not branch:
+                continue
+
+            with self._lock:
+                correlation_id = self._branch_to_correlation.get(branch)
+
+            if not correlation_id:
+                continue
+
+            self._record_response(correlation_id, raw)
+
+    def _record_response(self, correlation_id: str, raw_response: str) -> None:
+        with self._lock:
+            queue = self._responses.setdefault(correlation_id, [])
+            queue.append(raw_response)
+            if len(queue) > self.max_buffered_responses:
+                del queue[: len(queue) - self.max_buffered_responses]
+            event = self._response_events.setdefault(correlation_id, threading.Event())
+            event.set()
+
+    def _drain_responses(self, correlation_id: str) -> List[str]:
+        with self._lock:
+            queue = self._responses.get(correlation_id, [])
+            if not queue:
+                return []
+            drained = list(queue)
+            self._responses[correlation_id] = []
+            return drained
+
+    def _resolve_target_uri(self, device: DeviceProfile, context: Mapping[str, Any]) -> str:
+        context_target_uri = str(context.get("target_uri", "")).strip()
+        if context_target_uri:
+            return self._normalize_target_uri(context_target_uri)
+
+        metadata_target_uri = str(device.metadata.get("target_uri", "")).strip()
+        if metadata_target_uri:
+            return self._normalize_target_uri(metadata_target_uri)
+
+        return self._normalize_target_uri(device.address)
+
+    def _normalize_target_uri(self, raw_target: str) -> str:
+        value = (raw_target or "").strip()
+        if not value:
+            raise ValueError("Target URI/address is empty")
+
+        if value.startswith("<") and value.endswith(">"):
+            value = value[1:-1].strip()
+
+        if value.lower().startswith("sip:") or value.lower().startswith("sips:"):
+            return value
+
+        host = value
+        port = self.default_target_port
+
+        if host.startswith("[") and "]" in host:
+            end = host.find("]")
+            base_host = host[1:end]
+            remainder = host[end + 1 :].strip()
+            host = base_host
+            if remainder.startswith(":") and remainder[1:].isdigit():
+                port = int(remainder[1:])
+        elif host.count(":") == 1 and host.rsplit(":", 1)[1].isdigit():
+            host_part, port_part = host.rsplit(":", 1)
+            host = host_part
+            port = int(port_part)
+
+        host = host.strip()
+        if not host:
+            raise ValueError("Target host is empty")
+
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+
+        return f"sip:{host}:{port};transport={self.default_target_transport}"
+
+    def _build_branch(self, correlation_id: str) -> str:
+        return f"{self.via_branch_prefix}{correlation_id}"
+
+    def _build_forward_message(self, raw_message: str, target_uri: str, branch: str) -> str:
+        from .editor import parse_raw_sip_message, render_raw_sip_message
+
+        parsed = parse_raw_sip_message(raw_message)
+        self._remove_header(parsed.headers, self.header_name)
+
+        if self.inject_via:
+            via_value = (
+                f"SIP/2.0/UDP {self.advertised_host}:{self.listen_port};"
+                f"branch={branch};rport"
+            )
+            parsed.headers.insert(0, f"Via: {via_value}")
+
+        target_value = target_uri
+        if not target_value.startswith("<"):
+            target_value = f"<{target_value}>"
+        insert_index = 1 if self.inject_via else 0
+        parsed.headers.insert(insert_index, f"{self.header_name}: {target_value}")
+
+        return render_raw_sip_message(parsed)
+
+    @staticmethod
+    def _remove_header(headers: List[str], name: str) -> None:
+        target = name.strip().lower()
+        headers[:] = [line for line in headers if not line.lower().startswith(f"{target}:")]
+
+    @staticmethod
+    def _extract_top_via_branch(raw_message: str) -> str:
+        normalized = raw_message.replace("\r\n", "\n")
+        head, _, _ = normalized.partition("\n\n")
+        for line in head.split("\n"):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            lower = stripped.lower()
+            if lower.startswith("via:") or lower.startswith("v:"):
+                parts = stripped.split(":", 1)
+                if len(parts) < 2:
+                    continue
+                value = parts[1]
+                for token in value.split(";"):
+                    token = token.strip()
+                    if token.lower().startswith("branch="):
+                        return token.split("=", 1)[1].strip()
+                return ""
+        return ""
+
+
+class Open5GSDiscoverer:
+    """
+    Discovers devices from Open5GS using pdu-info API and MongoDB.
+    
+    This discoverer:
+    1. Queries Open5GS pdu-info API to get list of active PDU sessions with IMSI and UE IP
+    2. Queries MongoDB to get subscriber phone numbers from IMSI
+    3. Returns DeviceProfile list with discovered devices
+    """
+
+    def __init__(self, settings: Mapping[str, Any] | None = None) -> None:
+        self.settings: Dict[str, Any] = dict(settings or {})
+        
+        self.open5gs_api_url = str(self.settings.get("open5gs_api_url", "")).strip().rstrip("/")
+        if not self.open5gs_api_url:
+            raise ValueError("open5gs discoverer requires settings.open5gs_api_url")
+        
+        self.mongodb_uri = str(self.settings.get("mongodb_uri", "")).strip()
+        if not self.mongodb_uri:
+            raise ValueError("open5gs discoverer requires settings.mongodb_uri")
+        
+        self.mongodb_db = str(self.settings.get("mongodb_db", "open5gs")).strip() or "open5gs"
+        self.request_timeout_seconds = float(self.settings.get("request_timeout_seconds", 10.0) or 10.0)
+        
+    def discover_devices(self) -> List[DeviceProfile]:
+        """
+        Discover devices from Open5GS and MongoDB.
+        
+        Returns a list of DeviceProfile with:
+        - device_id: derived from IMSI
+        - address: UE IP from pdu-info
+        - metadata: contains imsi, phone_number (if found)
+        """
+        try:
+            # Get PDU sessions from Open5GS
+            pdu_sessions = self._get_pdu_sessions()
+            
+            # For each session, enrich with phone number from MongoDB
+            devices: Dict[str, DeviceProfile] = {}
+            for session in pdu_sessions:
+                imsi = str(session.get("imsi", "")).strip()
+                ue_ip = str(session.get("ue_ip", "")).strip()
+                
+                if not imsi or not ue_ip:
+                    continue
+                
+                device_id = f"ue_{imsi}"
+                
+                # Try to get phone number from MongoDB
+                phone_number = self._get_phone_number_from_mongodb(imsi)
+                
+                metadata = {
+                    "imsi": imsi,
+                    "source": "open5gs-pdu-info",
+                }
+                if phone_number:
+                    metadata["phone_number"] = phone_number
+                
+                devices[device_id] = DeviceProfile(
+                    device_id=device_id,
+                    display_name=f"UE-{imsi}" + (f" ({phone_number})" if phone_number else ""),
+                    address=ue_ip,
+                    metadata=metadata,
+                )
+            
+            return list(devices.values())
+        except Exception as exc:
+            raise RuntimeError(f"Failed to discover devices from Open5GS: {exc}") from exc
+    
+    def _get_pdu_sessions(self) -> List[Dict[str, Any]]:
+        """Query Open5GS pdu-info API endpoint."""
+        path = "/api/v1/subscribers"
+        sessions: List[Dict[str, Any]] = []
+        
+        try:
+            response = self._get_json(path)
+            subscribers = response.get("subscribers", [])
+            
+            if not isinstance(subscribers, list):
+                return []
+            
+            for subscriber in subscribers:
+                if not isinstance(subscriber, Mapping):
+                    continue
+                
+                imsi = str(subscriber.get("imsi", "")).strip()
+                if not imsi:
+                    continue
+                
+                # Check for active sessions/context
+                session_contexts = subscriber.get("session", [])
+                if isinstance(session_contexts, list):
+                    for context in session_contexts:
+                        if not isinstance(context, Mapping):
+                            continue
+                        
+                        pdu_sessions = context.get("pdu_session", [])
+                        if isinstance(pdu_sessions, list):
+                            for pdu_session in pdu_sessions:
+                                if not isinstance(pdu_session, Mapping):
+                                    continue
+                                
+                                # Extract UE IP from PDU session
+                                ue_ip_list = pdu_session.get("ue_ip", [])
+                                if isinstance(ue_ip_list, list) and len(ue_ip_list) > 0:
+                                    ue_ip = str(ue_ip_list[0]).strip()
+                                    if ue_ip:
+                                        sessions.append({
+                                            "imsi": imsi,
+                                            "ue_ip": ue_ip,
+                                        })
+                                        break  # Use first IP for this UE
+            
+            return sessions
+        except Exception as exc:
+            raise RuntimeError(f"Failed to get PDU sessions from Open5GS API: {exc}") from exc
+    
+    def _get_phone_number_from_mongodb(self, imsi: str) -> str:
+        """Query MongoDB for phone number by IMSI."""
+        try:
+            # Try to import pymongo
+            try:
+                import pymongo
+            except ImportError:
+                raise RuntimeError(
+                    "pymongo is required for Open5GS discovery. "
+                    "Install with: pip install pymongo"
+                )
+            
+            client = pymongo.MongoClient(self.mongodb_uri, serverSelectionTimeoutMS=self.request_timeout_seconds * 1000)
+            db = client[self.mongodb_db]
+            
+            # Query subscribers collection for MSISDN by IMSI
+            subscriber = db.subscribers.find_one({"imsi": imsi})
+            client.close()
+            
+            if subscriber and "msisdn" in subscriber:
+                msisdn = subscriber.get("msisdn")
+                if isinstance(msisdn, list) and len(msisdn) > 0:
+                    return str(msisdn[0]).strip()
+                elif msisdn:
+                    return str(msisdn).strip()
+            
+            return ""
+        except Exception as exc:
+            # Log but don't fail - phone number is optional
+            # In production, could log this
+            return ""
+    
+    def _get_json(self, path: str) -> Dict[str, Any]:
+        """Helper to make GET requests to Open5GS API."""
+        url = self.open5gs_api_url + path
+        request = urllib.request.Request(url, method="GET")
+        request.add_header("Content-Type", "application/json")
+        
+        try:
+            with urllib.request.urlopen(request, timeout=max(self.request_timeout_seconds, 0.2)) as response:
+                raw = response.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"HTTP error from Open5GS API: {exc.code} {body}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"Cannot reach Open5GS API at {self.open5gs_api_url}: {exc}") from exc
+        
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Invalid JSON from Open5GS API: {raw}") from exc
+        
+        if not isinstance(parsed, Mapping):
+            raise RuntimeError(f"Unexpected JSON response from Open5GS API: {parsed}")
+        
+        return dict(parsed)
+
+
 class TransportRegistry:
     def __init__(self) -> None:
         self._factories: Dict[str, Callable[[Mapping[str, Any]], SipTransport]] = {
             "stub": lambda settings: StubSipTransport(settings),
             "sip-proxy-http": lambda settings: SipProxyHttpTransport(settings),
+            "kamailio-forward": lambda settings: KamailioForwardTransport(settings),
         }
 
     def register(self, name: str, factory: Callable[[Mapping[str, Any]], SipTransport]) -> None:

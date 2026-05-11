@@ -256,6 +256,61 @@ def test_load_runtime_config_allows_no_devices_for_sip_proxy_http(tmp_path: Path
     runtime = load_runtime_config(path)
     assert runtime.transport.name == "sip-proxy-http"
     assert runtime.devices == {}
+    assert runtime.discovery.method == "sip-proxy"  # Default
+
+
+def test_load_runtime_config_with_discovery_method_sip_proxy(tmp_path: Path) -> None:
+    path = tmp_path / "runtime.yaml"
+    path.write_text(
+        _yaml(
+            """
+            transport:
+              name: sip-proxy-http
+              settings:
+                api_base_url: http://localhost:8080
+            
+            discovery:
+              method: sip-proxy
+            
+            devices: []
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    runtime = load_runtime_config(path)
+    assert runtime.discovery.method == "sip-proxy"
+    assert runtime.discovery.settings == {}
+
+
+def test_load_runtime_config_with_discovery_method_open5gs(tmp_path: Path) -> None:
+    path = tmp_path / "runtime.yaml"
+    path.write_text(
+        _yaml(
+            """
+            transport:
+              name: sip-proxy-http
+              settings:
+                api_base_url: http://localhost:8080
+            
+            discovery:
+              method: open5gs
+              settings:
+                open5gs_api_url: http://127.0.0.1:3000
+                mongodb_uri: mongodb://127.0.0.1:27017
+                mongodb_db: open5gs
+                request_timeout_seconds: 10
+            
+            devices: []
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    runtime = load_runtime_config(path)
+    assert runtime.discovery.method == "open5gs"
+    assert runtime.discovery.settings["open5gs_api_url"] == "http://127.0.0.1:3000"
+    assert runtime.discovery.settings["mongodb_uri"] == "mongodb://127.0.0.1:27017"
 
 
 def test_load_runtime_config_validates_shapes_and_duplicates(tmp_path: Path) -> None:
@@ -273,6 +328,9 @@ def test_load_runtime_config_validates_shapes_and_duplicates(tmp_path: Path) -> 
                 metadata: []
               - id: dev
                 address: 10.0.0.2
+            
+            discovery:
+              method: invalid-method
             """
         ),
         encoding="utf-8",
@@ -285,3 +343,4 @@ def test_load_runtime_config_validates_shapes_and_duplicates(tmp_path: Path) -> 
     assert "transport.settings must be a mapping" in errors
     assert "devices[1].metadata must be a mapping" in errors
     assert "Duplicate device id 'dev' in runtime config" in errors
+    assert "discovery.method must be one of: sip-proxy, open5gs" in errors

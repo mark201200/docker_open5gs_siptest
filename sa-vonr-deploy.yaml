@@ -428,7 +428,7 @@ services:
     image: docker_sip_proxy
     dns: ${DNS_IP}
     volumes:
-      - ./sip_proxy:/mnt/sip_proxy
+      - ./sip_proxy/sip_proxy.py:/app/sip_proxy.py
       - /etc/localtime:/etc/localtime:ro
     env_file:
       - .env
@@ -466,6 +466,7 @@ services:
       - NET_ADMIN
     volumes:
       - ./pcscf:/mnt/pcscf
+      - ./kamailio_rpc:/var/run/kamailio
       #- /etc/timezone:/etc/timezone:ro
       - /etc/localtime:/etc/localtime:ro
     env_file:

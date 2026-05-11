@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import re
 from typing import Any, Dict, Union
 
 from .models import ComparisonReport, ComplianceReport
@@ -33,21 +34,42 @@ def render_compliance_report(report: ComplianceReport) -> str:
 
 
 def render_comparison_report(report: ComparisonReport) -> str:
+    device_line = " vs ".join(report.device_ids or [report.device_a, report.device_b])
     lines = [
         f"Suite: {report.suite_id} ({report.suite_title})",
-        f"Comparison: {report.device_a} vs {report.device_b}",
+        f"Comparison: {device_line}",
         f"Result: {report.cases_with_differences}/{report.total_cases} cases with differences",
         f"Window: {report.started_at_utc} -> {report.finished_at_utc}",
         "",
     ]
 
-    for case in report.case_results:
+    for case_index, case in enumerate(report.case_results):
+        if case_index > 0:
+            lines.append("")
+
         label = "DIFF" if case.differences_found else "MATCH"
         lines.append(f"[{label}] {case.case_id} - {case.description}")
-        for iteration in case.iterations:
+        for iteration_index, iteration in enumerate(case.iterations):
+            if iteration_index > 0:
+                lines.append("")
+
             i_label = "DIFF" if iteration.differences else "MATCH"
             lines.append(f"  Iteration {iteration.iteration}: {i_label}")
             for item in iteration.differences:
-                lines.append(f"    - {item}")
+                lines.extend(_format_comparison_difference(item))
 
     return "\n".join(lines)
+
+
+def _format_comparison_difference(item: str) -> list[str]:
+    header_match = re.match(r"^header '(.+?)' differs: A=(.+), B=(.+)$", item)
+    if header_match is None:
+        return [f"    - {item}"]
+
+    header_name, value_a, value_b = header_match.groups()
+    return [
+        f"    - header '{header_name}' differs:",
+        f"        A={value_a}",
+        f"        B={value_b}",
+        "",
+    ]

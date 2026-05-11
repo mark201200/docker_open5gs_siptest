@@ -1,6 +1,68 @@
-\chapter{Introduzione e contesto}
-\begin{minipage}{12cm}\textit{In questo capitolo viene introdotto il problema del testing di stack IMS su dispositivi COTS e il contesto tecnologico in cui si inserisce il framework proposto.}
-\end{minipage}
+\chapter{Background e contesto}
+\begin{minipage}{12cm}\textit{In questo capitolo viene inquadrato il problema del testing di stack \emph{IP Multimedia Subsystem} (IMS) su dispositivi \emph{Commercial Off-The-Shelf} (COTS) e vengono richiamati solo i concetti indispensabili, in particolare il protocollo \emph{Session Initiation Protocol} (SIP), per comprendere il framework proposto.}\end{minipage}
 \vspace*{1cm}
 
-Descrivere il ruolo dei protocolli 4G/5G, le motivazioni del lavoro e gli obiettivi generali della tesi.
+\section{Il contesto 4G e 5G}
+Nelle reti di quarta generazione (4G), basate su \emph{Long Term Evolution} (LTE), e di quinta generazione (5G), basate su \emph{New Radio} (NR), la telefonia non \`e pi\`u un servizio dedicato del dominio circuito, ma viene erogata come servizio su \emph{Internet Protocol} (IP) tramite \emph{Voice over LTE} (VoLTE) o \emph{Voice over NR} (VoNR). In entrambi i casi la segnalazione voce passa tipicamente attraverso un'infrastruttura IMS, in cui i messaggi SIP definiscono registrazione, instaurazione della sessione e relative politiche di instradamento.
+
+Per il lavoro svolto in questa tesi il dettaglio dell'architettura del core (\emph{Evolved Packet Core}, EPC, nel 4G; \emph{5G Core}, 5GC, nel 5G) \`e rilevante solo nella misura in cui condiziona il percorso della segnalazione. Il punto centrale \`e che gran parte del comportamento osservabile di un terminale COTS, e quindi verificabile dall'esterno, emerge a livello IMS/SIP: \`e su questo piano che si concentrano i test di conformit\`a e robustezza.
+
+In particolare, anche se i meccanismi di mobilit\`a, autenticazione e policy cambiano tra 4G e 5G, la catena di segnalazione IMS rimane il punto in cui il terminale espone il proprio comportamento applicativo. Per questa ragione il framework assume la segnalazione SIP come superficie osservabile e manipolabile: variare in modo controllato uno scambio SIP consente di esercitare il parsing e le logiche interne del dispositivo senza richiedere accesso al suo ambiente di esecuzione.
+
+\section{Il problema del testing su dispositivi COTS}
+I dispositivi COTS (\emph{Commercial Off-The-Shelf}) implementano stack IMS spesso proprietari e poco osservabili. In un contesto sperimentale questo crea un paradosso: i casi pi\`u interessanti da verificare sono proprio quelli in cui la segnalazione devia dal percorso nominale, ma il terminale resta una ``scatola nera'' e non pu\`o essere strumentato internamente.
+
+Il testing tradizionale, basato su osservazione passiva o su strumenti pensati per stack modificabili, incontra tre limiti ricorrenti:
+\begin{itemize}
+	\item \textbf{Osservabilit\`a}: il comportamento interno del device deve essere inferito dai messaggi di rete.
+	\item \textbf{Ripetibilit\`a}: scenari complessi devono poter essere riprodotti a parit\`a di condizioni, in modo documentabile.
+	\item \textbf{Controllo}: per testare robustezza e sicurezza serve introdurre variazioni mirate senza rompere la coerenza del dialogo.
+\end{itemize}
+
+Ne consegue la necessit\`a di un approccio ``dall'esterno'': un'infrastruttura che consenta di orchestrare scenari e manipolare la segnalazione in modo controllato, senza richiedere modifiche al firmware del terminale o all'ambiente dell'operatore.
+
+\section{Conformit\`a, robustezza e sicurezza}
+Nel dominio IMS, la conformit\`a \`e legata al rispetto delle specifiche normative: l'architettura e le procedure di rete mobile sono descritte prevalentemente dal \emph{3rd Generation Partnership Project} (3GPP), mentre la segnalazione SIP \`e standardizzata dall'\emph{Internet Engineering Task Force} (IETF) tramite documenti \emph{Request for Comments} (RFC). In pratica, un test di conformit\`a verifica che, a fronte di uno stimolo noto (ad esempio un \texttt{REGISTER} o un \texttt{INVITE}), il dispositivo produca messaggi corretti e coerenti con lo stato del dialogo.
+
+La robustezza riguarda invece la capacit\`a del terminale di gestire input inattesi senza comportamenti anomali. In un protocollo testuale come SIP, piccole variazioni nella forma dei messaggi (intestazioni duplicate, valori incoerenti, campi opzionali mancanti) possono attivare percorsi di parsing meno battuti, con effetti osservabili anche senza accesso al codice sorgente. La verifica della robustezza si basa quindi su modifiche mirate e ripetibili del traffico, seguite dall'osservazione di risposta, timeout o comportamenti divergenti.
+
+La sicurezza si intreccia naturalmente con la robustezza: molte vulnerabilit\`a in stack di segnalazione derivano da assunzioni implicite sul formato dei messaggi e sulla sequenza degli scambi. Un framework di test che preserva il messaggio raw e consente di applicare trasformazioni controllate costituisce quindi una base utile sia per verifiche di conformit\`a sia per campagne di analisi pi\`u orientate alla ricerca di condizioni limite.
+
+\section{Obiettivi e contributi della tesi}
+L'obiettivo di questa tesi \`e progettare e realizzare un framework che renda il testing di stack IMS su dispositivi COTS \emph{pratico e riusabile}: non un insieme di prove ad hoc, ma una base software capace di supportare campagne di verifica ripetibili e confrontabili.
+
+I contributi principali del lavoro sono concreti e verificabili:
+\begin{itemize}
+	\item sviluppo del \emph{Test program}, una \emph{Command Line Interface} (CLI) in Python per validare suite di test, eseguire verifiche di conformit\`a su un singolo device e confrontare terminali in modalit\`a differenziale;
+	\item definizione di un formato dichiarativo in \emph{YAML Ain't Markup Language} (YAML) per descrivere messaggi SIP raw, modifiche controllate, attese e parametri di runtime;
+	\item progettazione di un sistema a plugin per i backend di trasporto (es. `sip-proxy-http`, `kamailio-forward`, backend simulato), cos\`i da separare logica di test e meccanismo di comunicazione;
+	\item integrazione con un laboratorio replicabile basato su Docker e su componenti 4G/5G+IMS, includendo discovery dei dispositivi e gestione di regole di \emph{live edit} sul traffico;
+	\item generazione di report sia testuali sia \emph{JavaScript Object Notation} (JSON) per rendere i risultati archiviabili e confrontabili.
+\end{itemize}
+
+In sintesi, il valore del framework \`e trasformare un'attivit\`a tipicamente manuale e fragile (testare un device COTS in IMS) in un processo pi\`u controllato, ripetibile e misurabile.
+
+\section{Concetti tecnici di base}
+Le sezioni seguenti richiamano i concetti minimi necessari a leggere la tesi: che cos'\`e IMS, quali elementi della catena sono rilevanti e quali propriet\`a di SIP rendono possibile (ma delicata) l'ispezione e la manipolazione dei messaggi durante i test.
+
+\section{Architettura IMS}
+L'\emph{IP Multimedia Subsystem} (IMS) \`e l'architettura usata per erogare servizi multimediali, inclusa la voce, sopra un'infrastruttura IP. Il suo ruolo \`e gestire registrazione, autenticazione e controllo di sessione, separando la logica di servizio dal livello di accesso radio.
+
+Dal punto di vista operativo, il terminale interagisce con un \emph{Proxy--Call Session Control Function} (P-CSCF) come primo punto di ingresso nel dominio IMS, e le richieste vengono poi gestite da nodi come \emph{Interrogating--Call Session Control Function} (I-CSCF) e \emph{Serving--Call Session Control Function} (S-CSCF). Le funzioni di identit\`a e profilo (ad esempio \emph{Home Subscriber Server} (HSS), o componenti equivalenti nel dominio 5G) supportano autenticazione e autorizzazioni.
+
+Per questa tesi \`e fondamentale la separazione tra piani: la segnalazione (SIP) controlla registrazione e sessioni, mentre i flussi media vengono negoziati separatamente (tipicamente via \emph{Session Description Protocol} (SDP)) e trasportati fuori banda. Il framework interviene sul piano di segnalazione, mantenendo per quanto possibile invariato il trasporto media.
+
+\section{Il protocollo SIP}
+SIP (\emph{Session Initiation Protocol}) \`e il protocollo testuale usato da IMS per stabilire, modificare e terminare sessioni. I metodi pi\`u rilevanti nel contesto della tesi sono \texttt{REGISTER} (registrazione), \texttt{INVITE}/\texttt{ACK} (instaurazione della chiamata) e \texttt{BYE} (terminazione), oltre a \texttt{CANCEL} e \texttt{OPTIONS} per scenari specifici.
+
+La natura testuale di SIP facilita l'ispezione del traffico, ma impone anche attenzione: intestazioni come \texttt{Via}, \texttt{Route}/\texttt{Record-Route}, \texttt{Contact}, \texttt{Call-ID} (\emph{Call Identifier}), \texttt{CSeq} (\emph{Command Sequence}) e i campi \texttt{From}/\texttt{To} determinano routing e stato del dialogo. Alterare un singolo campo pu\`o rendere il messaggio non pi\`u correlabile, o cambiare il percorso nella catena IMS. Per questo il framework adotta un approccio conservativo: tratta il messaggio come testo raw e applica trasformazioni solo quando esplicitamente richiesto dalla suite.
+
+\section{Flussi rilevanti per il framework}
+Dal punto di vista dei test, i flussi pi\`u importanti sono tre. Il primo \`e la registrazione SIP, che rende il dispositivo raggiungibile. Il secondo \`e la segnalazione di sessione, cio\`e l'instaurazione e la chiusura della chiamata con i messaggi correlati. Il terzo \`e la negoziazione dei parametri media tramite SDP, che deve rimanere coerente con il comportamento osservato sul piano di segnalazione.
+
+Operativamente, il proxy di test si colloca sul percorso della segnalazione per osservare e applicare regole di manipolazione controllata, mentre il motore di test orchestra l'ordine dei casi, gestisce timeout e attese e produce report. In questo modo diventano eseguibili sia test di conformit\`a sia test di robustezza e sicurezza senza intervenire direttamente sul terminale.
+
+\section{Sintesi}
+Il contesto 4G/5G motiva la centralit\`a della segnalazione IMS/SIP per i servizi vocali su IP; la natura ``black-box'' dei dispositivi COTS rende per\`o difficile un testing rigoroso senza un'infrastruttura dedicata. Il framework sviluppato in questa tesi fornisce tale infrastruttura, combinando orchestrazione dei test e controllo del traffico.
+
+Queste nozioni costituiscono la base per i capitoli successivi: nel Capitolo 2 verranno tradotte in requisiti, casi d'uso e scelte progettuali del framework; nei capitoli seguenti saranno poi riprese per descrivere architettura, implementazione e validazione.

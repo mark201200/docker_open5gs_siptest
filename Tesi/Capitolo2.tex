@@ -1,6 +1,108 @@
-\chapter{Background e stato dell'arte}
-\begin{minipage}{12cm}\textit{Questo capitolo introduce il contesto tecnologico necessario per comprendere il problema: architettura IMS, protocolli SIP/4G/5G e strumenti di testing esistenti.}
-\end{minipage}
+\chapter{Requisiti e progettazione}
+\begin{minipage}{12cm}\textit{Questo capitolo formalizza i requisiti del framework e descrive le scelte progettuali che hanno guidato lo sviluppo del \emph{Test program} e dei backend di trasporto. L'obiettivo \`e rendere esplicito il legame tra vincoli del dominio IMS/SIP, casistica di test considerata e componenti software realizzati.}\end{minipage}
 \vspace*{1cm}
 
-Descrivere in modo sintetico i concetti di base, evidenziando le tecnologie rilevanti e i limiti delle soluzioni disponibili.
+\section{Contesto del Test program}
+Il Test program \`e stato progettato per rendere il testing di stack IMS su dispositivi COTS un processo ripetibile e documentabile. Il punto di partenza \`e la natura ``black-box'' dei terminali: non \`e possibile strumentarli internamente e, in molti casi, non \`e possibile modificare la rete dell'operatore o i nodi IMS reali coinvolti nel laboratorio. Di conseguenza, la verifica deve essere condotta dall'esterno, osservando e generando traffico SIP in modo controllato.
+
+Nel lavoro svolto, questo obiettivo si \`e tradotto nella realizzazione di tre elementi complementari:
+\begin{itemize}
+	\item un linguaggio dichiarativo in YAML per descrivere casi di test basati su messaggi SIP raw, modifiche esplicite e condizioni di successo/fallimento;
+	\item una CLI in Python (il Test program) che valida le suite, orchestra l'esecuzione, gestisce timeout/attese e produce report;
+	\item un insieme di backend di trasporto che collegano il motore di test al laboratorio (proxy con tester API, forwarding verso P-CSCF, backend simulato).
+\end{itemize}
+
+L'idea progettuale \`e separare tre responsabilit\`a, cos\`i da mantenere riusabili i test anche quando cambia l'ambiente:
+\begin{enumerate}
+	\item \textbf{Definizione dello scenario} (cosa inviare e cosa aspettarsi): descritta nella suite YAML.
+	\item \textbf{Trasporto ed esecuzione} (come il messaggio raggiunge il target e come si leggono le risposte): incapsulata nei plugin di trasporto.
+	\item \textbf{Valutazione e presentazione} (quali criteri decretano il successo e come si riportano i risultati): gestita dal motore e dai renderer di report.
+\end{enumerate}
+
+Inoltre, oltre ai casi nominali (es. \texttt{REGISTER} e chiamate \texttt{INVITE}/\texttt{BYE}), la tesi considera scenari non nominali utili per la robustezza: header inconsistenti, valori limite, messaggi incompleti o varianti di formattazione. Per supportare questa casistica senza introdurre ``correzioni'' automatiche, il framework tratta il messaggio SIP come testo raw e applica trasformazioni solo quando esplicitamente richiesto dalla suite.
+
+\section{Requisiti funzionali}
+I requisiti funzionali sono stati derivati dai flussi IMS/SIP da verificare e dai vincoli operativi del laboratorio. Ogni requisito \`e stato tradotto in una funzionalit\`a implementata e verificabile nel Test program.
+
+\begin{description}
+	\item[RF1 -- Validazione delle suite] Il sistema deve validare le suite YAML prima dell'esecuzione (schema, campi obbligatori, duplicati, vincoli tra campi), in modo da ridurre fallimenti ``a runtime'' e rendere i risultati confrontabili.
+	\item[RF2 -- Esecuzione di test di conformit\`a] Deve essere possibile eseguire una suite contro un singolo dispositivo e verificare, per ogni caso, che la risposta osservata soddisfi le aspettative (codice, intestazioni, body e timing).
+	\item[RF3 -- Confronto differenziale tra dispositivi] Deve essere possibile eseguire gli stessi casi su due o pi\`u terminali e produrre un confronto strutturato delle differenze, riducendo i falsi positivi dovuti a mere varianti di formattazione.
+	\item[RF4 -- Gestione dell'inventario e discovery] Il framework deve supportare sia dispositivi configurati staticamente sia dispositivi scoperti dinamicamente durante l'attivit\`a di laboratorio (ad esempio osservando \texttt{REGISTER}), unificando il tutto in un inventario unico selezionabile da CLI.
+	\item[RF5 -- Intercettazione e live editing] Deve essere possibile osservare e, quando richiesto, modificare selettivamente il traffico SIP ``in transito'' tramite regole controllate, cos\`i da implementare casi di robustezza e di sicurezza senza alterare il terminale.
+	\item[RF6 -- Reporting leggibile e archiviabile] L'esecuzione deve produrre report testuali per l'operatore e report JSON per analisi successive, includendo esito per caso, motivazioni dei fallimenti e metadati utili alla tracciabilit\`a.
+\end{description}
+
+\section{Requisiti non funzionali}
+Oltre alla correttezza funzionale, il framework deve poter essere usato in campagne di test ripetute, evolvere nel tempo e restare debuggabile.
+
+\begin{description}
+	\item[RNF1 -- Ripetibilit\`a] A parit\`a di suite e runtime, il comportamento del runner deve essere deterministico: timeout e attese sono configurabili, e l'ordine dei passi \`e guidato dalla suite.
+	\item[RNF2 -- Estendibilit\`a] L'aggiunta di un nuovo backend di trasporto non deve richiedere modifiche al motore di esecuzione, ma solo l'implementazione dell'interfaccia prevista e la registrazione del plugin.
+	\item[RNF3 -- Manutenibilit\`a] Modello dati, parsing/validazione, trasporto e logica di test devono restare separati per ridurre l'accoppiamento e rendere pi\`u semplice la manutenzione.
+	\item[RNF4 -- Portabilit\`a] Il sistema deve funzionare sia in sviluppo locale sia nel laboratorio Docker, mantenendo la configurazione esterna al codice e descritta in YAML.
+	\item[RNF5 -- Osservabilit\`a] In caso di fallimento, il sistema deve fornire abbastanza informazioni per diagnosticare il problema (messaggi inviati/osservati, motivazione della mismatch, contesto del device e del trasporto).
+\end{description}
+
+\section{Casi d'uso}
+I casi d'uso seguenti descrivono come i requisiti vengono esercitati dall'operatore durante una sessione di test.
+
+\begin{description}
+	\item[UC1 -- Validare una suite]\leavevmode\\
+	L'operatore esegue la modalit\`a \texttt{validate} su un file YAML di test. Il risultato \`e un esito immediato (successo/errore) con indicazione precisa della regola violata.
+	\item[UC2 -- Eseguire una suite su un dispositivo]\leavevmode\\
+	L'operatore seleziona un device (esplicitamente o via selezione interattiva) e avvia \texttt{run-\allowbreak standard}. Per ogni caso la CLI invia il messaggio (eventualmente dopo applicazione di modifiche) e valuta la risposta secondo le aspettative, producendo un report di conformit\`a.
+	\item[UC3 -- Confrontare due o pi\`u dispositivi]\leavevmode\\
+	L'operatore avvia \texttt{compare} (o seleziona pi\`u device in \texttt{run-\allowbreak standard}) e ottiene un report che evidenzia differenze nei codici di risposta, nelle intestazioni e nel body.
+	\item[UC4 -- Unire dispositivi statici e scoperti]\leavevmode\\
+	L'operatore usa \texttt{list-\allowbreak devices} per visualizzare l'inventario complessivo: profili definiti nel runtime e profili scoperti dinamicamente (es. da \texttt{REGISTER} o tramite Open5GS), utilizzabili poi come target di esecuzione.
+	\item[UC5 -- Attivare regole di live edit]\leavevmode\\
+	Durante una sessione, il tester abilita regole di intercettazione/modifica sul proxy (automaticamente attraverso la suite o manualmente via comandi \texttt{live-\allowbreak edit-\allowbreak list}/\texttt{live-\allowbreak edit-\allowbreak clear}) per riprodurre specifiche condizioni di errore o varianti di segnalazione.
+\end{description}
+
+\section{Modalit\`a di esecuzione}
+Il framework prevede pi\`u modalit\`a operative, tutte esposte dalla CLI.
+
+La modalit\`a \texttt{validate} controlla la suite di test senza contattare alcun dispositivo. \`E il primo passo consigliato, perch\`e consente di individuare errori di struttura o vincoli mancanti prima di coinvolgere il laboratorio.
+
+La modalit\`a \texttt{run-\allowbreak standard} esegue i casi di una suite su un dispositivo. Se vengono selezionati pi\`u device, la CLI passa automaticamente a un confronto differenziale per evitare ambiguit\`a sull'obiettivo dell'esecuzione.
+
+La modalit\`a \texttt{compare} esegue esplicitamente il confronto tra due o pi\`u dispositivi. Questa scelta rende chiara la semantica del comando e permette di trattare confronti su pi\`u terminali senza duplicare la logica del motore.
+
+La modalit\`a \texttt{list-\allowbreak devices} unisce dispositivi configurati e dispositivi scoperti, rendendo visibile all'operatore quale inventario sia effettivamente disponibile nel momento dell'esecuzione.
+
+Le modalit\`a \texttt{live-\allowbreak edit-\allowbreak list} e \texttt{live-\allowbreak edit-\allowbreak clear} servono a gestire lo stato del proxy e a mantenere pulito l'ambiente di test tra una sessione e l'altra.
+
+\section{Scelte progettuali}
+Le principali scelte progettuali riflettono i requisiti descritti sopra e sono state validate durante lo sviluppo del laboratorio.
+
+La prima scelta \`e stata usare YAML come formato di configurazione delle suite e del runtime. Questo formato \`e leggibile da un operatore umano, ma abbastanza strutturato da poter essere validato con regole precise; inoltre permette di descrivere messaggi, modifiche, attese e parametri di esecuzione senza introdurre strumenti esterni.
+
+La seconda scelta \`e stata introdurre un modello a plugin per i backend di trasporto. Il motore di test non deve conoscere i dettagli del backend \texttt{sip-proxy-http}, del backend \texttt{stub} o dell'inoltro verso Kamailio: deve soltanto parlare con un'interfaccia comune che espone apertura, chiusura, invio e lettura delle risposte.
+
+La terza scelta \`e stata mantenere il messaggio SIP come testo raw il pi\`u possibile. Questo approccio evita normalizzazioni involontarie e rende eseguibili anche scenari limite (robustezza/sicurezza) in cui la forma del messaggio conta quanto il suo contenuto semantico.
+
+La quarta scelta \`e stata rendere la selezione dei dispositivi flessibile e indipendente dall'inventario statico. L'operatore pu\`o selezionare per id, nome, IP, IMSI o numero telefonico; quando il contesto lo consente, pu\`o inoltre basarsi su discovery dinamica per evitare configurazioni manuali fragili.
+
+La quinta scelta \`e stata includere una comparazione robusta delle risposte, con normalizzazione di header e body. In questo modo il framework segnala differenze reali e limita i falsi positivi dovuti a varianti di formattazione non significative.
+
+\section{Plugin \texttt{sip-proxy-http}}
+Il plugin \texttt{sip-proxy-http} \`e il backend pi\`u vicino al proxy reale usato nel laboratorio. Il suo compito \`e inoltrare comandi HTTP al proxy, che a sua volta si occupa del traffico SIP verso i dispositivi e della raccolta delle risposte.
+
+Questo backend espone un insieme di operazioni essenziali: health check, invio messaggi, lettura risposte, lettura dei dispositivi scoperti e gestione delle regole di live edit. Dal punto di vista del Test program, il trasporto \`e sincrono: il runner invia un JSON contenente il messaggio grezzo e un identificatore di correlazione, quindi attende la risposta con un timeout configurabile.
+
+La discovery da \texttt{REGISTER} \`e particolarmente importante. In un laboratorio realistico i dispositivi possono apparire o scomparire nel tempo, e l'inventario non pu\`o essere considerato statico. Per questo il backend integra i device scoperti nel medesimo elenco usato per la selezione interattiva o per la risoluzione dei selettori passati da CLI. Quando richiesto dall'esperimento, la discovery pu\`o anche essere ottenuta interrogando Open5GS, mantenendo invariata l'interfaccia vista dal runner.
+
+Un'altra responsabilit\`a del plugin \`e mantenere la coerenza tra il messaggio da testare e il target verso cui il proxy deve inoltrarlo. Quando il runtime lo richiede, la destinazione pu\`o essere derivata dal device stesso o da metadati specifici, senza costringere la suite a conoscere la topologia di rete sottostante.
+
+\section{Plugin \texttt{kamailio-forward}}
+Il plugin \texttt{kamailio-forward} rappresenta una modalit\`a alternativa pensata per scenari in cui il Test program deve parlare con il P-CSCF e chiedergli di inoltrare il messaggio verso il terminale di destinazione. In questo caso il backend non usa il proxy come endpoint HTTP, ma come punto di instradamento SIP attraverso un'intestazione dedicata.
+
+L'idea progettuale \`e che il Test program inserisca nel messaggio un header che identifica il target, mentre il P-CSCF riconosce quell'header e reinstrada il traffico verso il device indicato. Il backend si occupa inoltre di inserire (quando abilitato) un \texttt{Via} locale per correlare le risposte e di bufferizzare i messaggi ricevuti in attesa della lettura da parte del runner.
+
+Questa soluzione \`e utile quando si vuole testare il comportamento della catena IMS mantenendo il P-CSCF come nodo effettivo di inoltro, ma introducendo allo stesso tempo un punto di iniezione controllato per i messaggi di test.
+
+\section{Sintesi}
+I requisiti e le scelte progettuali presentati in questo capitolo traducono un'esigenza centrale della tesi: rendere il testing IMS/SIP su dispositivi COTS ripetibile, estendibile e leggibile. La combinazione di suite dichiarative, motore di esecuzione e backend pluggabili consente di adattare il framework a pi\`u laboratori mantenendo invariata la descrizione dei casi di test.
+
+I capitoli successivi descrivono come queste scelte si concretizzino nell'architettura del sistema, nell'implementazione dei moduli principali e nella validazione sperimentale.

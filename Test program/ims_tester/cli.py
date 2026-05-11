@@ -33,13 +33,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_standard_cmd = subparsers.add_parser(
         "run-standard",
-        help="Run expected-response validation against one device",
+        help="Run expected-response validation against one device (auto-switches to diff when multiple are selected)",
     )
     run_standard_cmd.add_argument("--test-config", required=True, help="Path to test suite YAML")
     run_standard_cmd.add_argument("--runtime-config", required=True, help="Path to runtime YAML")
     run_standard_cmd.add_argument(
         "--device",
-        help="Device ID, phone number, or IP. If omitted, choose from discovered devices.",
+        help="Device ID, phone number, or IP. May be comma-separated. If omitted, choose one or more devices from discovered devices.",
     )
     run_standard_cmd.add_argument(
         "--report-json",
@@ -53,12 +53,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     compare_cmd = subparsers.add_parser(
         "compare",
-        help="Run differential comparison between two devices",
+        help="Run differential comparison between two or more devices",
     )
     compare_cmd.add_argument("--test-config", required=True, help="Path to test suite YAML")
     compare_cmd.add_argument("--runtime-config", required=True, help="Path to runtime YAML")
-    compare_cmd.add_argument("--device-a", required=True, help="First device ID")
-    compare_cmd.add_argument("--device-b", required=True, help="Second device ID")
+    compare_cmd.add_argument(
+        "--device",
+        action="append",
+        dest="devices",
+        help="Device ID, phone number, or IP. May be repeated. If omitted, choose from discovered devices.",
+    )
     compare_cmd.add_argument(
         "--report-json",
         help="Optional path to write machine-readable JSON report",
@@ -112,8 +116,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return _handle_compare(
                 test_config_path=args.test_config,
                 runtime_config_path=args.runtime_config,
-                device_a_id=args.device_a,
-                device_b_id=args.device_b,
+                device_selectors=args.devices,
                 report_json_path=args.report_json,
                 wait_for_enter_between_cases=not args.no_wait,
             )
@@ -206,33 +209,56 @@ def _handle_run_standard(
     runner = ComplianceTestRunner(transport, modifier)
 
     transport.open()
+    reports: list[ComplianceReport] = []
     try:
         available_devices, _ = _collect_available_devices(runtime, transport)
         if device_id and device_id.strip():
-            device = _resolve_device(available_devices, device_id)
+            devices = _resolve_devices_from_selector_string(available_devices, [device_id])
         else:
-            device = _prompt_for_device_selection(available_devices)
+            devices = _prompt_for_multiple_device_selection(available_devices, minimum_count=1)
 
-        report = runner.run(
-            suite,
-            device,
-            wait_for_enter_between_cases=wait_for_enter_between_cases,
-        )
+        if len(devices) > 1:
+            print("Multiple devices selected. Running differential comparison instead of run-standard.")
+            diff_runner = DifferentialTestRunner(transport, modifier)
+            report = diff_runner.run(
+                suite,
+                *devices,
+                wait_for_enter_between_cases=wait_for_enter_between_cases,
+            )
+            print(render_comparison_report(report))
+            if report_json_path:
+                _write_report_json(report_json_path, report)
+            return 0 if not report.differences_found else 11
+
+        for device_index, device in enumerate(devices, start=1):
+            if len(devices) > 1:
+                print(
+                    f"Running standard suite for device {device_index}/{len(devices)}: {_format_device_line(device)}"
+                )
+
+            report = runner.run(
+                suite,
+                device,
+                wait_for_enter_between_cases=wait_for_enter_between_cases,
+            )
+            reports.append(report)
+            print(render_compliance_report(report))
+
+            if device_index < len(devices):
+                print("")
     finally:
         transport.close()
 
-    print(render_compliance_report(report))
     if report_json_path:
-        _write_report_json(report_json_path, report)
+        _write_report_json(report_json_path, reports[0] if len(reports) == 1 else reports)
 
-    return 0 if report.success else 10
+    return 0 if all(report.success for report in reports) else 10
 
 
 def _handle_compare(
     test_config_path: str,
     runtime_config_path: str,
-    device_a_id: str,
-    device_b_id: str,
+    device_selectors: Sequence[str] | None,
     report_json_path: str | None,
     wait_for_enter_between_cases: bool,
 ) -> int:
@@ -246,13 +272,11 @@ def _handle_compare(
     transport.open()
     try:
         available_devices, _ = _collect_available_devices(runtime, transport)
-        device_a = _resolve_device(available_devices, device_a_id)
-        device_b = _resolve_device(available_devices, device_b_id)
+        devices = _resolve_devices_for_compare(available_devices, device_selectors)
 
         report = runner.run(
             suite,
-            device_a,
-            device_b,
+            *devices,
             wait_for_enter_between_cases=wait_for_enter_between_cases,
         )
     finally:
@@ -265,17 +289,43 @@ def _handle_compare(
     return 0 if not report.differences_found else 11
 
 
-def _resolve_device(available_devices: Mapping[str, DeviceProfile], device_selector: str) -> DeviceProfile:
-    device = _find_device(available_devices, device_selector)
-    if device is None:
+def _resolve_devices_for_compare(
+    available_devices: Mapping[str, DeviceProfile],
+    device_selectors: Sequence[str] | None,
+) -> list[DeviceProfile]:
+    if device_selectors:
+        devices = _resolve_devices_from_selector_string(available_devices, device_selectors)
+        if len(devices) < 2:
+            raise ConfigValidationError(["compare mode requires at least two devices."])
+        return devices
+
+    return _prompt_for_multiple_device_selection(available_devices)
+
+
+def _resolve_devices_from_selector_string(
+    available_devices: Mapping[str, DeviceProfile],
+    device_selectors: Sequence[str],
+) -> list[DeviceProfile]:
+    selected_devices: list[DeviceProfile] = []
+    invalid_selectors: list[str] = []
+
+    for selector_value in device_selectors:
+        selected, invalid = _resolve_device_selection_values(available_devices, selector_value)
+        selected_devices.extend(selected)
+        invalid_selectors.extend(invalid)
+
+    selected_devices = _deduplicate_devices(selected_devices)
+    if invalid_selectors:
         available = ", ".join(sorted(available_devices.keys()))
         raise ConfigValidationError(
             [
-                f"Unknown device '{device_selector}'. Available device IDs: {available or '(none)'}",
+                f"Unknown device selector(s): {', '.join(invalid_selectors)}.",
+                f"Available device IDs: {available or '(none)'}",
                 "Tip: omit --device to choose interactively from discovered SIP REGISTER devices.",
             ]
         )
-    return device
+
+    return selected_devices
 
 
 def _collect_available_devices(
@@ -285,10 +335,25 @@ def _collect_available_devices(
     available_devices: Dict[str, DeviceProfile] = dict(runtime.devices)
     discovered_devices: Dict[str, DeviceProfile] = {}
 
-    if isinstance(transport, SipProxyHttpTransport):
-        for discovered in transport.list_discovered_devices():
-            discovered_devices[discovered.device_id] = discovered
-            available_devices.setdefault(discovered.device_id, discovered)
+    discovery_method = runtime.discovery.method.lower()
+    
+    if discovery_method == "open5gs":
+        # Use Open5GS pdu-info API + MongoDB discovery
+        try:
+            from .adapters import Open5GSDiscoverer
+            discoverer = Open5GSDiscoverer(runtime.discovery.settings)
+            for discovered in discoverer.discover_devices():
+                discovered_devices[discovered.device_id] = discovered
+                available_devices.setdefault(discovered.device_id, discovered)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to discover devices using open5gs method: {exc}") from exc
+    
+    elif discovery_method == "sip-proxy":
+        # Use SIP REGISTER discovery from sip-proxy-http
+        if isinstance(transport, SipProxyHttpTransport):
+            for discovered in transport.list_discovered_devices():
+                discovered_devices[discovered.device_id] = discovered
+                available_devices.setdefault(discovered.device_id, discovered)
 
     return available_devices, discovered_devices
 
@@ -397,6 +462,104 @@ def _prompt_for_device_selection(available_devices: Mapping[str, DeviceProfile])
         print("Invalid selection. Please enter a valid number or device identifier.")
 
 
+def _prompt_for_multiple_device_selection(
+    available_devices: Mapping[str, DeviceProfile],
+    *,
+    minimum_count: int = 2,
+) -> list[DeviceProfile]:
+    ordered = _sort_devices(available_devices)
+    if len(ordered) < minimum_count:
+        raise ConfigValidationError(
+            [
+                f"At least {minimum_count} device(s) are required.",
+                "If using sip-proxy-http, wait for phones to REGISTER then rerun.",
+            ]
+        )
+
+    if minimum_count == 1 and len(ordered) == 1:
+        selected = ordered[0]
+        print(f"No --device provided. Auto-selected only available device: {_format_device_line(selected)}")
+        return [selected]
+
+    if minimum_count == 2 and len(ordered) == 2:
+        print(
+            "No --device provided. Auto-selected the only two available devices: "
+            + ", ".join(_format_device_line(device) for device in ordered)
+        )
+        return ordered
+
+    if not sys.stdin.isatty():
+        available = ", ".join(device.device_id for device in ordered)
+        raise ConfigValidationError(
+            [
+                "--device is required in non-interactive mode when multiple devices are available.",
+                f"Available device IDs: {available}",
+            ]
+        )
+
+    if minimum_count == 1:
+        print("No --device provided. Choose one or more devices separated by commas:")
+    else:
+        print("No --device provided. Choose two or more devices separated by commas:")
+    for index, device in enumerate(ordered, start=1):
+        print(_format_device_selection_line(index, device))
+
+    while True:
+        choice = input("Select by numbers or device ids, separated by commas: ").strip()
+        if not choice:
+            continue
+
+        selected, invalid = _resolve_device_selection_values(available_devices, choice)
+        selected = _deduplicate_devices(selected)
+        if invalid:
+            print("Invalid selection. Please enter valid numbers or device identifiers separated by commas.")
+            continue
+
+        if len(selected) >= minimum_count:
+            return selected
+
+        print(
+            f"Invalid selection. Please choose at least {minimum_count} valid numbers or device identifiers."
+        )
+
+
+def _resolve_device_selection_values(
+    available_devices: Mapping[str, DeviceProfile],
+    value: str,
+) -> tuple[list[DeviceProfile], list[str]]:
+    selected: list[DeviceProfile] = []
+    invalid: list[str] = []
+    for item in value.split(","):
+        selector = item.strip()
+        if not selector:
+            continue
+        if selector.isdigit():
+            ordered = _sort_devices(available_devices)
+            index = int(selector)
+            if 1 <= index <= len(ordered):
+                selected.append(ordered[index - 1])
+            else:
+                invalid.append(selector)
+            continue
+        device = _find_device(available_devices, selector)
+        if device is not None:
+            selected.append(device)
+        else:
+            invalid.append(selector)
+    return selected, invalid
+
+
+def _deduplicate_devices(devices: Sequence[DeviceProfile]) -> list[DeviceProfile]:
+    unique: list[DeviceProfile] = []
+    seen: set[str] = set()
+    for device in devices:
+        if device.device_id in seen:
+            continue
+        seen.add(device.device_id)
+        unique.append(device)
+    return unique
+
+
 def _resolve_proxy_transport(runtime: RuntimeConfig) -> SipProxyHttpTransport:
     transport = TransportRegistry().create(runtime.transport.name, runtime.transport.settings)
     if not isinstance(transport, SipProxyHttpTransport):
@@ -437,9 +600,12 @@ def _handle_live_edit_clear(runtime_config_path: str) -> int:
     return 0
 
 
-def _write_report_json(path: str, report: ComplianceReport | ComparisonReport) -> None:
+def _write_report_json(path: str, report: ComplianceReport | ComparisonReport | Sequence[ComplianceReport]) -> None:
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = report_to_dict(report)
+    if isinstance(report, Sequence) and not isinstance(report, (str, bytes)):
+        payload = [report_to_dict(item) for item in report]
+    else:
+        payload = report_to_dict(report)
     out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(f"JSON report written: {out_path}")

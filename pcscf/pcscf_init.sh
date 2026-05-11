@@ -41,6 +41,25 @@ cp -r /mnt/pcscf/sems /etc/kamailio_pcscf
 cp /mnt/pcscf/tls.cfg /etc/kamailio_pcscf
 cp /mnt/pcscf/dispatcher.list /etc/kamailio_pcscf
 
+# Ensure JSON-RPC socket directory exists and is writable for external tooling.
+mkdir -p /var/run/kamailio
+chmod 777 /var/run/kamailio
+
+(
+	i=0
+	while [[ $i -lt 30 ]]; do
+		if [[ -S /var/run/kamailio/kamailio_rpc.sock ]]; then
+			chmod 666 /var/run/kamailio/kamailio_rpc.sock
+			if [[ -p /var/run/kamailio/kamailio_rpc.fifo ]]; then
+				chmod 666 /var/run/kamailio/kamailio_rpc.fifo
+			fi
+			break
+		fi
+		sleep 1
+		i=$((i + 1))
+	done
+) &
+
 while ! mysqladmin ping -h ${MYSQL_IP} --silent; do
 	sleep 5;
 done

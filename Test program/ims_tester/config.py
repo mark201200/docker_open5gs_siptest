@@ -14,6 +14,7 @@ from .models import (
     RepeatPolicy,
     RuntimeConfig,
     RuntimeTransportConfig,
+    RuntimeDiscoveryConfig,
     TestCase,
     TestSuite,
 )
@@ -191,12 +192,26 @@ def load_runtime_config(path: str | Path) -> RuntimeConfig:
             "At least one device is required in runtime config unless transport.name is sip-proxy-http"
         )
 
+    discovery_block = _as_mapping(payload.get("discovery", {}), "discovery", errors)
+    discovery_method = _as_string(discovery_block.get("method", "sip-proxy"), default="sip-proxy").lower()
+    if discovery_method not in {"sip-proxy", "open5gs"}:
+        errors.append(
+            f"discovery.method must be one of: sip-proxy, open5gs (got '{discovery_method}')"
+        )
+        discovery_method = "sip-proxy"
+    
+    discovery_settings = discovery_block.get("settings", {})
+    if not isinstance(discovery_settings, Mapping):
+        errors.append("discovery.settings must be a mapping")
+        discovery_settings = {}
+
     if errors:
         raise ConfigValidationError(errors)
 
     return RuntimeConfig(
         transport=RuntimeTransportConfig(name=transport_name, settings=dict(transport_settings)),
         devices=devices,
+        discovery=RuntimeDiscoveryConfig(method=discovery_method, settings=dict(discovery_settings)),
     )
 
 

@@ -7,6 +7,7 @@ from ims_tester.editor import BasicSipMessageModifier
 from ims_tester.engine import ComplianceTestRunner, DifferentialTestRunner
 from ims_tester.models import (
     ExpectedResponse,
+    DeviceProfile,
     MessageEdit,
     MessageSpec,
     RepeatPolicy,
@@ -314,5 +315,91 @@ def test_differential_runner_reports_differences(device_pixel, device_galaxy) ->
 
     assert report.differences_found is True
     assert report.cases_with_differences == 1
+    assert report.device_ids == [device_pixel.device_id, device_galaxy.device_id]
     diffs = report.case_results[0].iterations[0].differences
     assert any("status_code differs" in item for item in diffs)
+
+
+def test_differential_runner_supports_three_devices(device_pixel, device_galaxy) -> None:
+    device_tablet = DeviceProfile(
+        device_id="device_tablet",
+        display_name="Tablet",
+        address="10.0.0.3",
+        metadata={},
+    )
+    transport = StubSipTransport(
+        {
+            "canned_responses": {
+                device_pixel.device_id: {"REGISTER": "SIP/2.0 200 OK\r\n\r\n"},
+                device_galaxy.device_id: {"REGISTER": "SIP/2.0 404 Not Found\r\n\r\n"},
+                device_tablet.device_id: {"REGISTER": "SIP/2.0 200 OK\r\n\r\n"},
+            }
+        }
+    )
+    runner = DifferentialTestRunner(transport, BasicSipMessageModifier())
+
+    case = ModelTestCase(
+        case_id="c1",
+        description="",
+        message=MessageSpec(
+            message_type="REGISTER",
+            template="REGISTER sip:x SIP/2.0\r\n\r\n",
+            repeat=RepeatPolicy(count=1, rate_per_second=1.0),
+        ),
+        expected_response=ExpectedResponse(),
+    )
+
+    suite = ModelTestSuite(suite_id="s1", title="", default_timeout_seconds=1.0, cases=[case])
+
+    transport.open()
+    try:
+        report = runner.run(suite, device_pixel, device_galaxy, device_tablet)
+    finally:
+        transport.close()
+
+    assert report.device_ids == [device_pixel.device_id, device_galaxy.device_id, device_tablet.device_id]
+    iteration = report.case_results[0].iterations[0]
+    assert set(iteration.responses_by_device) == {
+        device_pixel.device_id,
+        device_galaxy.device_id,
+        device_tablet.device_id,
+    }
+    assert any("status_code differs" in item for item in iteration.differences)
+
+
+def test_differential_runner_normalizes_header_order_and_body_whitespace(device_pixel, device_galaxy) -> None:
+    transport = StubSipTransport(
+        {
+            "canned_responses": {
+                device_pixel.device_id: {
+                    "REGISTER": "SIP/2.0 200 OK\r\nX-Test: alpha\r\nX-Order: one\r\n\r\nLine1\r\nLine2\r\n",
+                },
+                device_galaxy.device_id: {
+                    "REGISTER": "SIP/2.0 200 OK\r\nX-Order: one\r\nx-test: alpha \r\n\r\nLine1\nLine2  \n",
+                },
+            }
+        }
+    )
+    runner = DifferentialTestRunner(transport, BasicSipMessageModifier())
+
+    case = ModelTestCase(
+        case_id="c1",
+        description="",
+        message=MessageSpec(
+            message_type="REGISTER",
+            template="REGISTER sip:x SIP/2.0\r\n\r\n",
+            repeat=RepeatPolicy(count=1, rate_per_second=1.0),
+        ),
+        expected_response=ExpectedResponse(),
+    )
+
+    suite = ModelTestSuite(suite_id="s1", title="", default_timeout_seconds=1.0, cases=[case])
+
+    transport.open()
+    try:
+        report = runner.run(suite, device_pixel, device_galaxy)
+    finally:
+        transport.close()
+
+    assert report.differences_found is False
+    assert report.case_results[0].iterations[0].differences == []
