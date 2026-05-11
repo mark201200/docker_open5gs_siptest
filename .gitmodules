@@ -1,0 +1,6 @@
+[submodule "sip_proxy"]
+	path = sip_proxy
+	url = https://github.com/mark201200/sip_proxy.git
+[submodule "ims_tester"]
+	path = ims_tester
+	url = https://github.com/mark201200/ims_tester.git
